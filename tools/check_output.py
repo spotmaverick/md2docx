@@ -11,6 +11,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
 
 
 def check_rtf(path: str) -> list[str]:
+    import rtf_writer
     errs = []
     data = open(path, "rb").read()
     try:
@@ -75,6 +76,23 @@ def check_rtf(path: str) -> list[str]:
     paired = len(re.findall(r"\\u-?\d+(?!\d)\\'3f", text))
     if total != paired:
         errs.append("有 %d/%d 处 \\uN 缺少单字节回退" % (total - paired, total))
+
+    # 嵌入图片：存在 \pict 时必须带 blip；目标尺寸不超版心宽/高
+    has_pict = "\\pict" in text
+    for blip in ("pngblip", "jpegblip"):
+        if re.search(r"\\pict\\" + blip, text):
+            break
+    else:
+        if has_pict:
+            errs.append("\\pict 缺少 pngblip/jpegblip")
+    for m in re.finditer(r"\\picwgoal(\d+)", text):
+        if int(m.group(1)) > rtf_writer.CONTENT_W + 1:
+            errs.append("图片目标宽度 %s 超出版心宽度 %d"
+                        % (m.group(1), rtf_writer.CONTENT_W))
+    for m in re.finditer(r"\\pichgoal(\d+)", text):
+        if int(m.group(1)) > rtf_writer.CONTENT_H + 1:
+            errs.append("图片目标高度 %s 超出版心高度 %d"
+                        % (m.group(1), rtf_writer.CONTENT_H))
     return errs
 
 
@@ -95,6 +113,19 @@ def check_docx(path: str) -> list[str]:
         errs.append("没有生成超链接")
     if "w:shd" not in body_xml:
         errs.append("没有底纹（代码块/表格）")
+
+    # 图片：有 drawing 就必须是真实内嵌图片，尺寸不超版心宽/高
+    if "w:drawing" in body_xml:
+        sec = doc.sections[0]
+        max_w = sec.page_width - sec.left_margin - sec.right_margin
+        max_h = sec.page_height - sec.top_margin - sec.bottom_margin
+        if not doc.inline_shapes:
+            errs.append("含 w:drawing 但 InlineShapes 为空")
+        for sh in doc.inline_shapes:
+            if sh.width > max_w + 1:
+                errs.append("图片宽度 %d 超出版心宽度 %d" % (sh.width, max_w))
+            if sh.height > max_h + 1:
+                errs.append("图片高度 %d 超出版心高度 %d" % (sh.height, max_h))
     return errs
 
 

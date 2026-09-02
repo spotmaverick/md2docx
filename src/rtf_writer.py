@@ -6,20 +6,15 @@
 """
 from __future__ import annotations
 
-import base64
-import os
-import struct
-import urllib.request
-from urllib.parse import unquote, urlparse
-
 import theme
+from imgsrc import fetch as fetch_image
 from mdmodel import Block, Run, runs_to_text
-
-UA = {"User-Agent": "Mozilla/5.0 Md2docs"}
 
 # 页面尺寸（twips，1cm = 567twips）
 PAGE_W = 11907
 CONTENT_W = PAGE_W - 2 * 1418
+# 版心高度（A4 高 16840 - 上下边距 2*1418）
+CONTENT_H = 16840 - 2 * 1418
 
 F_BODY, F_MONO, F_HEAD = 0, 1, 2
 
@@ -58,64 +53,6 @@ def esc(s: str) -> str:
                 out.append("\\u%d" % (u if u < 32768 else u - 65536))
                 out.append("\\'3f")
     return "".join(out)
-
-
-def _image_size(data: bytes) -> tuple[int, int] | None:
-    if data[:8] == b"\x89PNG\r\n\x1a\n" and len(data) > 24:
-        try:
-            w, h = struct.unpack(">II", data[16:24])
-            return int(w), int(h)
-        except struct.error:
-            return None
-    if data[:2] == b"\xff\xd8":
-        i = 2
-        n = len(data)
-        while i < n - 9:
-            if data[i] != 0xFF:
-                i += 1
-                continue
-            marker = data[i + 1]
-            if marker in (0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7,
-                          0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF):
-                try:
-                    h, w = struct.unpack(">HH", data[i + 5:i + 9])
-                    return int(w), int(h)
-                except struct.error:
-                    return None
-            if marker in (0xD8, 0xD9) or 0xD0 <= marker <= 0xD7:
-                i += 2
-                continue
-            try:
-                seglen = struct.unpack(">H", data[i + 2:i + 4])[0]
-            except struct.error:
-                return None
-            i += 2 + seglen
-    return None
-
-
-def load_bytes(src: str, base_dir: str) -> bytes | None:
-    if not src:
-        return None
-    try:
-        if src.startswith(("http://", "https://", "//")):
-            url = ("https:" + src) if src.startswith("//") else src
-            req = urllib.request.Request(url, headers=UA)
-            with urllib.request.urlopen(req, timeout=15) as f:
-                return f.read()
-        if src.startswith("data:"):
-            head, payload = src.split(",", 1)
-            if "base64" in head:
-                return base64.b64decode(payload)
-            return None
-        path = unquote(src.replace("/", os.sep))
-        if not os.path.isabs(path):
-            path = os.path.join(base_dir, path)
-        if os.path.isfile(path):
-            with open(path, "rb") as f:
-                return f.read()
-    except Exception:
-        return None
-    return None
 
 
 # --------------------------------------------------------------------------- #
@@ -213,26 +150,24 @@ class RtfWriter:
 
     # -- 图片 ------------------------------------------------------------ #
     def _picture(self, src: str, alt: str) -> str:
-        data = load_bytes(src, self.base_dir)
-        if not data:
+        """嵌入图片：先下载/读取到内存，PNG/JPEG 以 RTF blip 真正嵌入。
+
+        显示尺寸按 15 twips/px（96dpi）等比计算，不超过版心宽/高。
+        """
+        got = fetch_image(src, self.base_dir)
+        if not got or got.fmt not in ("png", "jpeg"):
             return esc("[图片%s]" % ("：" + alt if alt else ""))
-        if data[:8] == b"\x89PNG\r\n\x1a\n":
-            blip = "\\pngblip"
-        elif data[:2] == b"\xff\xd8":
-            blip = "\\jpegblip"
-        else:
-            return esc("[图片%s]" % ("：" + alt if alt else ""))
-        size = _image_size(data) or (600, 400)
-        pw, ph = size
-        goal_w = pw * 15
-        goal_h = ph * 15
-        if goal_w > CONTENT_W:
-            ratio = goal_h / goal_w
-            goal_w = CONTENT_W
-            goal_h = int(CONTENT_W * ratio)
+        blip = "\\pngblip" if got.fmt == "png" else "\\jpegblip"
+        pw, ph = got.width, got.height
+        if pw <= 0 or ph <= 0:          # 识别失败时兜底，仅保证能渲染
+            pw, ph = 600, 400
+        scale = min(CONTENT_W / (pw * 15.0),
+                    CONTENT_H / (ph * 15.0), 1.0)
+        goal_w = int(pw * 15 * scale)
+        goal_h = int(ph * 15 * scale)
         return ("{\\*\\shppict{\\pict%s\\picw%d\\pich%d"
                 "\\picwgoal%d\\pichgoal%d\n%s\n}}"
-                % (blip, pw, ph, goal_w, goal_h, data.hex()))
+                % (blip, pw, ph, goal_w, goal_h, got.data.hex()))
 
     # -- 块级 ------------------------------------------------------------ #
     def add(self, block: Block, **ctx):

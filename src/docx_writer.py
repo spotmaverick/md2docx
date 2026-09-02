@@ -3,21 +3,17 @@
 from __future__ import annotations
 
 import io
-import os
-import urllib.request
-from urllib.parse import unquote, urlparse
 
 from docx import Document
 from docx.enum.table import WD_TABLE_ALIGNMENT
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
-from docx.shared import Cm, Emu, Pt, RGBColor
+from docx.shared import Cm, Pt, RGBColor
 
 import theme
+from imgsrc import fetch as fetch_image
 from mdmodel import Block, Run
-
-UA = {"User-Agent": "Mozilla/5.0 Md2docs"}
 
 
 # --------------------------------------------------------------------------- #
@@ -107,42 +103,6 @@ def add_hyperlink(paragraph, url: str, text: str):
 
 
 # --------------------------------------------------------------------------- #
-# 资源加载（相对路径 / 网络图片）
-# --------------------------------------------------------------------------- #
-def load_image(src: str, base_dir: str) -> tuple[bytes, str] | None:
-    if not src:
-        return None
-    try:
-        if src.startswith(("http://", "https://", "//")):
-            url = ("https:" + src) if src.startswith("//") else src
-            with urllib.request.urlopen(url, timeout=15) as f:
-                data = f.read()
-            ext = os.path.splitext(urlparse(url).path)[1].lower() or ".png"
-            return data, ext
-        if src.startswith("data:"):
-            import base64
-            head, payload = src.split(",", 1)
-            data = base64.b64decode(payload)
-            ext = ".png"
-            if "jpeg" in head or "jpg" in head:
-                ext = ".jpg"
-            elif "gif" in head:
-                ext = ".gif"
-            return data, ext
-        path = unquote(src.replace("/", os.sep))
-        if not os.path.isabs(path):
-            path = os.path.join(base_dir, path)
-        if os.path.isfile(path):
-            with open(path, "rb") as f:
-                data = f.read()
-            ext = os.path.splitext(path)[1].lower() or ".png"
-            return data, ext
-    except Exception:
-        return None
-    return None
-
-
-# --------------------------------------------------------------------------- #
 # 主入口
 # --------------------------------------------------------------------------- #
 def write_docx(blocks: list[Block], out_path: str, base_dir: str = "",
@@ -190,11 +150,6 @@ def write_docx(blocks: list[Block], out_path: str, base_dir: str = "",
         _render_block(body, b, base_dir)
 
     doc.save(out_path)
-
-
-def _content_width(doc) -> Emu:
-    sec = doc.sections[0]
-    return sec.page_width - sec.left_margin - sec.right_margin
 
 
 def _render_block(doc, b: Block, base_dir: str, **ctx):
@@ -424,7 +379,13 @@ def _render_hr(doc):
 
 
 def _render_image(target, src: str, alt: str, base_dir: str):
-    """target 为 Document 时独占一段并居中，为 Paragraph 时行内插入。"""
+    """嵌入一张图片。
+
+    target 为 Document 时独占一段并居中；为 Paragraph 时在段内行内插入。
+    图片一律先下载/读取到内存再以真实图片嵌入（不写指向 URL 的链接）；
+    显示尺寸按 96dpi 自然尺寸等比缩放，不超过版心宽度（过长时也不超过
+    版心高度），独立成段的图片段落水平居中。
+    """
     own_para = hasattr(target, "add_paragraph")
     para = target.add_paragraph() if own_para else target
 
@@ -433,23 +394,31 @@ def _render_image(target, src: str, alt: str, base_dir: str):
         style_run(run, ea=theme.BODY_FONT_EA, size=10, italic=True,
                   color=theme.QUOTE_FG)
 
-    got = load_image(src, base_dir)
+    got = fetch_image(src, base_dir)
     if not got:
         placeholder()
         return
-    data, _ext = got
     try:
-        shape = para.add_run().add_picture(io.BytesIO(data))
+        shape = para.add_run().add_picture(io.BytesIO(got.data))
     except Exception:
         placeholder()
         return
     try:
-        doc = para.part.document
-        max_w = _content_width(doc)
-        if shape.width > max_w:
-            ratio = shape.height / shape.width
-            shape.width = int(max_w)
-            shape.height = int(max_w * ratio)
+        sec = para.part.document.sections[0]
+        max_w = sec.page_width - sec.left_margin - sec.right_margin
+        max_h = sec.page_height - sec.top_margin - sec.bottom_margin
+        if got.width > 0 and got.height > 0:
+            # 96dpi 基准（1px = 9525 EMU）：小图保持自然尺寸，大图收缩进版心
+            scale = min(max_w / (got.width * 9525.0),
+                        max_h / (got.height * 9525.0), 1.0)
+            shape.width = int(got.width * 9525 * scale)
+            shape.height = int(got.height * 9525 * scale)
+        else:
+            # 识别不出像素时沿用 python-docx 解析的自然尺寸，仅做超宽收缩
+            if shape.width > max_w:
+                ratio = shape.height / shape.width
+                shape.width = int(max_w)
+                shape.height = int(max_w * ratio)
     except Exception:
         pass
     if own_para:
