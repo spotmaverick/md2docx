@@ -1,0 +1,14 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# PyInstaller 构建产物
+build/
+dist/
+
+# 转换演示 / 自检输出（docx/doc/wps/txt 生成物不入库）
+tests/_demo_out/
+tests/_check_out/
