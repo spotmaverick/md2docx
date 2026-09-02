@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Md2docs · Markdown 转 Word / WPS / TXT</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%236366f1'/><text x='16' y='23' font-size='18' font-family='sans-serif' font-weight='700' fill='white' text-anchor='middle'>M</text></svg>">
+<link rel="stylesheet" href="/assets/style.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <div class="logo">M</div>
+    <div class="brand-text">
+      <h1>Md2docs</h1>
+      <p>Markdown 一键转成 Word / WPS / 纯文本</p>
+    </div>
+  </div>
+  <div class="topbar-right">
+    <span id="capBadges" class="badges"></span>
+  </div>
+</header>
+
+<main>
+  <!-- 文件选择 -->
+  <section class="panel">
+    <div class="panel-head">
+      <h2><span class="step">1</span>选择 Markdown 文件</h2>
+      <div class="panel-actions">
+        <button id="btnPick" class="btn-soft">浏览本机文件</button>
+        <button id="btnClear" class="btn-ghost">清空</button>
+      </div>
+    </div>
+
+    <div id="dropzone" class="dropzone">
+      <svg viewBox="0 0 24 24" class="dz-icon" aria-hidden="true">
+        <path d="M12 16V4m0 0L8 8m4-4 4 4" fill="none" stroke="currentColor"
+              stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3" fill="none"
+              stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+      </svg>
+      <p class="dz-title">把 <b>.md</b> 文件拖到这里</p>
+      <p class="dz-sub">或点击上方「浏览本机文件」从磁盘挑选（可多选，保留相对图片引用）。拖入的文件直接在内存读取，不产生上传缓存</p>
+    </div>
+
+    <ul id="fileList" class="file-list"></ul>
+    <p id="fileEmpty" class="empty-hint">还没有添加文件</p>
+  </section>
+
+  <!-- 输出设置 -->
+  <section class="panel">
+    <div class="panel-head">
+      <h2><span class="step">2</span>输出设置</h2>
+    </div>
+
+    <div class="formats" id="formats"></div>
+
+    <!-- 折叠：输出位置 -->
+    <div class="fold" id="foldOutDir">
+      <div class="fold-head" id="foldOutDirHead" role="button" tabindex="0" aria-expanded="false">
+        <span class="fold-ic">▸</span>
+        <span class="fold-title">输出位置</span>
+        <span class="fold-sum" id="foldOutDirSum">与源文件相同</span>
+      </div>
+      <div class="fold-body" id="foldOutDirBody">
+        <div class="fold-rows">
+          <label class="radio"><input type="radio" name="outMode" value="same" checked>
+            <span>与源文件相同</span></label>
+          <label class="radio"><input type="radio" name="outMode" value="custom">
+            <span>指定目录</span></label>
+          <div class="path-input">
+            <input type="text" id="outDir" placeholder="选择一个文件夹…" disabled>
+            <button id="btnPickDir" class="btn-soft" disabled>浏览</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 折叠：TXT 选项（勾选 TXT 格式自动展开） -->
+    <div class="fold" id="foldTxt">
+      <div class="fold-head" id="foldTxtHead" role="button" tabindex="0" aria-expanded="false">
+        <span class="fold-ic">▸</span>
+        <span class="fold-title">TXT 选项</span>
+        <span class="fold-tag" id="foldTxtTag">未选 TXT</span>
+      </div>
+      <div class="fold-body" id="foldTxtBody">
+        <div class="fold-rows">
+          <label class="radio"><input type="radio" name="txtMode" value="plain" checked>
+            <span>去掉 Markdown 符号</span></label>
+          <label class="radio"><input type="radio" name="txtMode" value="raw">
+            <span>保留原始 Markdown</span></label>
+          <select id="txtEnc" class="select">
+            <option value="utf-8">UTF-8</option>
+            <option value="utf-8-bom">UTF-8 BOM（记事本友好）</option>
+            <option value="gbk">GBK</option>
+          </select>
+        </div>
+      </div>
+    </div>
+
+    <!-- 折叠：.doc / .wps 高质量模式 -->
+    <div class="fold" id="foldNative">
+      <div class="fold-head" id="foldNativeHead" role="button" tabindex="0" aria-expanded="false">
+        <span class="fold-ic">▸</span>
+        <span class="fold-title">.doc / .wps 高质量模式</span>
+        <span class="fold-sum" id="foldNativeSum">RTF 兼容格式</span>
+        <label class="switch mini" id="nativeSwitch" title="调用本机 Word / WPS 生成原生二进制格式">
+          <input type="checkbox" id="nativeMode">
+          <span class="slider"></span>
+        </label>
+      </div>
+      <div class="fold-body" id="foldNativeBody">
+        <p class="hint" id="nativeHint"></p>
+      </div>
+    </div>
+  </section>
+
+  <!-- 转换 -->
+  <section class="panel">
+    <div class="panel-head">
+      <h2><span class="step">3</span>开始转换</h2>
+    </div>
+    <div class="runbar">
+      <button id="btnRun" class="btn-primary">开始转换</button>
+      <div id="progress" class="progress"><div class="bar"></div></div>
+      <span id="progressText" class="progress-text"></span>
+    </div>
+    <div id="results" class="results"></div>
+  </section>
+</main>
+
+<!-- 文件/目录浏览弹窗 -->
+<div id="modal" class="modal hidden">
+  <div class="modal-card">
+    <div class="modal-head">
+      <h3 id="modalTitle">选择文件</h3>
+      <button id="modalClose" class="icon-btn" aria-label="关闭">✕</button>
+    </div>
+    <div class="modal-toolbar">
+      <div id="driveBar" class="drives"></div>
+      <div class="modal-tools">
+        <button id="btnUp" class="btn-soft sm">上一级</button>
+        <button id="btnNewFolder" class="btn-soft sm">新建文件夹</button>
+      </div>
+    </div>
+    <div id="crumb" class="crumb"></div>
+    <div id="browserList" class="browser-list"></div>
+    <div class="modal-foot">
+      <span id="modalInfo" class="modal-info"></span>
+      <div>
+        <button id="modalCancel" class="btn-ghost">取消</button>
+        <button id="modalOk" class="btn-primary">选择</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<footer class="site-foot">
+  <span class="foot-line"></span>
+  <p>作者：王冠</p>
+</footer>
+
+<div id="toast" class="toast hidden"></div>
+
+<script src="/assets/app.js"></script>
+</body>
+</html>
