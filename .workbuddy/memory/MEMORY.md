@@ -40,7 +40,7 @@
 ## 打包
 
 - 命令：`pyinstaller Md2docs.build.spec --noconfirm --clean`（在 md2docs-tk venv 下执行）。
-- 产物：`dist/Md2docs.exe`，onefile + windowed，约 19.7 MB。
+- 产物：`dist/Md2docs.exe`，onefile + windowed，19,679,149 字节（≈ 18.8 MiB，即 Windows 显示口径）。
 - 程序图标在 `assets/app.ico`（**不要**放回 `build/`：该目录被 .gitignore 忽略且会被
   `--clean` 清空）。打包时作为 datas 落到包内 `build/app.ico`，与 `gui.resource_path` 约定一致。
 - 界面入口参数：GUI 默认；`--cli` 命令行转换；`--selftest` 界面自检；`--diag` 输出
