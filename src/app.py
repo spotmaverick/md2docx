@@ -1,17 +1,20 @@
 # -*- coding: utf-8 -*-
-"""Md2docs 启动入口。"""
+"""Md2docs 启动入口。
+
+两种运行方式：
+* 图形界面（默认）：原生 Tkinter 窗口，不使用任何 Web 技术；
+  支持把 .md 文件直接拖到 EXE 图标上或「发送到」，路径经命令行传入。
+* 命令行（--cli）：批量转换，便于脚本调用。
+"""
 from __future__ import annotations
 
 import argparse
 import os
 import sys
-import threading
 import time
 import traceback
-import urllib.request
-import webbrowser
 
-DEFAULT_PORT = 8756
+APP_TITLE = "Markdown 转 Word / WPS / TXT"
 
 
 def _log_path() -> str:
@@ -150,15 +153,18 @@ def _fail(msg: str):
         pass
 
 
-def already_running(port: int) -> bool:
+def _fatal(msg: str):
+    """界面起不来时的兜底提示（不依赖任何第三方库）。"""
+    _fail(msg)
     try:
-        with urllib.request.urlopen("http://127.0.0.1:%d/api/ping" % port,
-                                    timeout=1.5) as r:
-            return r.status == 200
+        import ctypes
+        ctypes.windll.user32.MessageBoxW(
+            None, msg[-1500:], "Md2docs 启动失败", 0x10)
     except Exception:
-        return False
+        pass
 
 
+# --------------------------------------------------------------------------- #
 def run_cli(args) -> int:
     _attach_console()
     import convert
@@ -197,111 +203,57 @@ def run_cli(args) -> int:
     return 0 if ok else 1
 
 
+def _existing_files(paths) -> list[str]:
+    """命令行 /「发送到」传入的文件，过滤出真实存在的路径。"""
+    out = []
+    for p in paths or []:
+        try:
+            ap = os.path.abspath(p)
+        except Exception:
+            continue
+        if os.path.isfile(ap) or os.path.isdir(ap):
+            out.append(ap)
+    return out
+
+
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Markdown 转 Word / WPS / TXT")
-    parser.add_argument("--port", type=int, default=DEFAULT_PORT)
-    parser.add_argument("--no-browser", action="store_true",
-                        help="不打开窗口，仅运行 HTTP 服务（测试用）")
-    parser.add_argument("--web", action="store_true",
-                        help="使用系统浏览器打开界面（默认是独立桌面窗口）")
+    parser = argparse.ArgumentParser(
+        description="Md2docs - %s（原生桌面程序，无 Web 依赖）" % APP_TITLE)
+    parser.add_argument("files", nargs="*", metavar="FILE",
+                        help="启动时直接载入的 Markdown 文件（可把文件拖到 EXE 图标上）")
     parser.add_argument("--cli", nargs="*", metavar="FILE",
                         help="命令行模式：直接转换，不启动界面")
-    parser.add_argument("-f", "--format", default="docx")
-    parser.add_argument("-o", "--out", default="")
+    parser.add_argument("-f", "--format", default="docx",
+                        help="命令行模式的输出格式，逗号分隔，默认 docx")
+    parser.add_argument("-o", "--out", default="",
+                        help="命令行模式的输出目录")
     parser.add_argument("--native", action="store_true",
                         help="调用本机 Word/WPS 生成原生 .doc/.wps")
     parser.add_argument("--txt-mode", default="plain", choices=["plain", "raw"])
     parser.add_argument("--txt-encoding", default="utf-8")
+    parser.add_argument("--selftest", action="store_true",
+                        help="内部自检：创建界面与控件后立即退出，不显示窗口")
+    parser.add_argument("--diag", action="store_true",
+                        help="内部诊断：输出 DPI 与窗口度量后退出")
     args = parser.parse_args()
 
     if args.cli is not None:
         return run_cli(args)
 
     try:
-        import server
-
-        port = args.port
-        if already_running(port):
-            webbrowser.open("http://127.0.0.1:%d/" % port)
-            return 0
-
-        if port:
-            # 端口被别的程序占用时退让到随机端口
-            import socket
-            s = socket.socket()
-            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            try:
-                s.bind(("127.0.0.1", port))
-            except OSError:
-                port = 0
-            finally:
-                s.close()
-
-        httpd, real_port = server.start_server(port)
-        url = "http://127.0.0.1:%d/" % real_port
-        _say("Md2docs 已启动：%s" % url)
-        _fail("started %s" % url)
-
-        if args.no_browser:
-            try:
-                httpd.serve_forever()
-            except KeyboardInterrupt:
-                pass
-            _cleanup_frozen_exit()
-            return 0
-
-        if args.web:
-            # 强制系统浏览器模式
-            threading.Timer(0.6, lambda: webbrowser.open(url)).start()
-            try:
-                httpd.serve_forever()
-            except KeyboardInterrupt:
-                pass
-            _cleanup_frozen_exit()
-            return 0
-
-        # 默认：独立桌面窗口（WebView2）
-        try:
-            return _run_desktop(httpd, url)
-        except Exception:
-            # pywebview/WebView2 不可用时回退到系统浏览器
-            _fail(traceback.format_exc())
-            threading.Timer(0.6, lambda: webbrowser.open(url)).start()
-            try:
-                httpd.serve_forever()
-            except KeyboardInterrupt:
-                pass
-            _cleanup_frozen_exit()
-            return 0
+        import gui
+        if args.diag:
+            _attach_console()
+            return gui.diagnose()
+        if args.selftest:
+            _attach_console()
+            return gui.selftest()
+        return gui.run(initial_files=_existing_files(args.files))
     except Exception:
-        _fail(traceback.format_exc())
-        raise
-
-
-def _run_desktop(httpd, url: str) -> int:
-    """用 WebView2 创建独立桌面窗口（pywebview），关闭窗口即退出程序。"""
-    import webview
-
-    threading.Thread(target=httpd.serve_forever, daemon=True).start()
-
-    window = webview.create_window(
-        "Md2docs · Markdown 转 Word / WPS / TXT",
-        url,
-        width=1140, height=800,
-        min_size=(980, 660),
-        background_color="#0f1117",
-    )
-    try:
-        webview.start()
-    except KeyboardInterrupt:
-        pass
-    # 窗口全部关闭：结束程序
-    try:
-        window.destroy()
-    except Exception:
-        pass
-    _cleanup_frozen_exit()
-    return 0
+        _fatal(traceback.format_exc())
+        return 1
+    finally:
+        _cleanup_frozen_exit()
 
 
 if __name__ == "__main__":

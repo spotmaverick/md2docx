@@ -12,3 +12,8 @@ dist/
 # 转换演示 / 自检输出（docx/doc/wps/txt 生成物不入库）
 tests/_demo_out/
 tests/_check_out/
+tests/_exe_out/
+tests/_exe_verify_*/
+tests/_gui_out/
+tests/_dnd_out/
+tests/_test_out/
