@@ -23,3 +23,6 @@ tests/_exe_i18n/
 tests/_exe_imgs/
 # 界面截图（由 tools/shot_ui.py 生成，可随时重跑）
 tests/_shots/
+# 回归脚本 / 自检的一次性输出（日志、探针文件、临时转换目录）
+# —— tests/ 下凡以 "_" 开头的一律视为生成物，真实固件（assets / *.md / *.js）不带下划线
+tests/_*

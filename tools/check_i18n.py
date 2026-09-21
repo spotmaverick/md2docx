@@ -396,7 +396,7 @@ def check_runtime(verbose: bool) -> list[str]:
                     for src, t in dirty[:20]:
                         problems.append("英文界面残留中文 %s → %s" % (src, t))
                 elif verbose:
-                    print("[i18n] 英文界面无中文字符 ✓")
+                    print("[i18n] 英文界面无中文字符（通过）")
             else:
                 if root.title() != i18n.t("app.window_title"):
                     problems.append("中文窗口标题不符：%r" % root.title())

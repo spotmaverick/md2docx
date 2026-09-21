@@ -4,13 +4,19 @@
 用 PrintWindow + PW_RENDERFULLCONTENT 直接取窗口位图——不依赖窗口在前台，
 桌面被 Windows 聚焦全屏层遮挡时同样有效（ImageGrab 那种抓屏方式会拍到遮挡层）。
 
-用法：python tools/shot_ui.py <输出目录>
+用法：
+    python tools/shot_ui.py <输出目录>            仅默认态（结果表为空）
+    python tools/shot_ui.py <输出目录> --run      先跑一次真实转换，结果表带内容
+
+--run 的价值：结果表的**状态列**只有跑过转换才看得见。核对状态文案的用字
+（例如 `√ 成功` / `× 失败`）时必须带这一项，否则截图上根本没有那一列。
 """
 from __future__ import annotations
 
 import ctypes
 import os
 import sys
+import time
 import tkinter as tk
 from ctypes import wintypes
 
@@ -68,7 +74,9 @@ def capture(hwnd: int) -> Image.Image:
 
 
 def main() -> int:
-    out_dir = sys.argv[1] if len(sys.argv) > 1 else os.path.join(ROOT, "tests")
+    argv = [a for a in sys.argv[1:] if not a.startswith("--")]
+    do_run = "--run" in sys.argv
+    out_dir = argv[0] if argv else os.path.join(ROOT, "tests")
     os.makedirs(out_dir, exist_ok=True)
     samples = [os.path.join(ROOT, "sample", "示例文档.md"),
                os.path.join(ROOT, "tests", "imgs_case.md")]
@@ -86,6 +94,22 @@ def main() -> int:
         # 展开一个折叠区，顺带展示折叠区里的圆角小按钮
         app.fold_out.set(True)
         root.update()
+
+        if do_run and files:
+            app.formats = set(gui.FMT_ORDER)
+            for fid in gui.FMT_ORDER:
+                app._paint_fmt_card(fid)
+            app._sync_txt_fold()
+            app.var_out_mode.set("custom")
+            app.var_out_dir.set(os.path.join(out_dir, "_conv"))
+            app.add_paths([files[0]])
+            app.start_convert()
+            deadline = time.time() + 180
+            while app.running and time.time() < deadline:
+                root.update()
+                time.sleep(0.05)
+            root.update()
+
         hwnd = u.GetParent(int(root.winfo_id())) or int(root.winfo_id())
         for lang in ("zh", "en"):
             app.set_language(lang, persist=False)

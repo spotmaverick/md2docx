@@ -13,6 +13,18 @@
 --------
 界面上**不允许**出现硬编码的可见文案，一律走 :func:`t`。
 ``tools/check_i18n.py`` 会用 ast 扫描源码强制执行这一约束。
+
+文案用字约束
+------------
+词条里只允许使用「UI 字体**有字形** 且 **GBK 可编码**」的字符：
+
+* 微软雅黑（含 YaHei UI）与 Segoe UI 都**没有** U+2713 / U+2715 的字形，
+  而 Windows 上的 Tk 走 GDI 绘制、GDI 不做字体回退，界面上会显示成方框；
+* 控制台与管道默认 GBK，打不出的字符会让 ``--selftest`` 的 ``print`` 抛
+  ``UnicodeEncodeError``，把"跑个自检"放大成"程序启动失败"。
+
+GB2312 符号区是安全来源（√ × ● ○ ■ □ ☆ ★ ※）。
+``tools/check_font_glyphs.py`` 会逐字符核验全部词条。
 """
 from __future__ import annotations
 
@@ -96,8 +108,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "res.col_file": "文件",
         "res.col_fmt": "格式",
         "res.col_info": "说明",
-        "res.state_ok": "✓ 成功",
-        "res.state_fail": "✕ 失败",
+        "res.state_ok": "√ 成功",
+        "res.state_fail": "× 失败",
         "res.failed": "转换失败",
         "res.file_missing": "文件不存在",
 
@@ -234,8 +246,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "res.col_file": "File",
         "res.col_fmt": "Format",
         "res.col_info": "Details",
-        "res.state_ok": "✓ Done",
-        "res.state_fail": "✕ Failed",
+        "res.state_ok": "√ Done",
+        "res.state_fail": "× Failed",
         "res.failed": "Conversion failed",
         "res.file_missing": "File not found",
 

@@ -64,6 +64,10 @@ def window_title() -> str:
 # 形成自增循环，表现为每点击一次格式卡片窗口就变宽一点。
 WIN_W = 988
 
+# 结果行的 ASCII 状态标记，**只用于控制台输出**（--selftest 逐行打印）。
+# 不打印结果表里的状态文案：那是界面用词，可能带控制台编码打不出的字符。
+STATE_MARKS = {"ok": "OK", "warn": "WARN", "bad": "FAIL"}
+
 
 # --------------------------------------------------------------------------- #
 # 基础工具
@@ -1771,7 +1775,11 @@ def selftest(md_path: str | None = None, out_dir: str | None = None) -> int:
         for i in rows:
             vals = app.res_tree.item(i, "values")
             tags = app.res_tree.item(i, "tags") or ("",)
-            print("   [%s] %s %s %s" % (tags[0], vals[0], vals[2], vals[3][:110]))
+            # 用 ASCII 状态标记，不打印结果表里的状态文案：那是界面用词，
+            # 可能含控制台编码打不出的符号（GBK 下的 √ / × 就是），
+            # 打印它会把自检直接带崩。详见 i18n 的"文案用字约束"。
+            print("   [%s] %s %s" % (STATE_MARKS.get(tags[0], tags[0]),
+                                     vals[2], vals[3][:110]))
         need(len(rows) == 4, "应产出 4 条结果（docx/doc/wps/txt）")
         need(all((app.res_tree.item(i, "tags") or [""])[0] in ("ok", "warn")
                  for i in rows), "存在失败的输出")

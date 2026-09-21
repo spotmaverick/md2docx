@@ -15,7 +15,15 @@
   中英两份键集必须一致（导入 `i18n` 时即自检，不一致直接抛错）。由
   `tools/check_i18n.py` 用 ast 静态扫描强制。
 - **任何逻辑判断不得依赖界面文案**。旧代码用 `info.endswith("成功")` 判转换成功，
-  界面切英文（`✓ Done`）后立即失效（V-12）。结果行 iid 即 `Result` 下标，按行取对象。
+  界面切英文（`√ Done`）后立即失效（V-12）。结果行 iid 即 `Result` 下标，按行取对象。
+- **文案用字约束**：词条只允许用「UI 字体**有字形** 且 **GBK 可编码**」的字符。
+  微软雅黑没有 U+2713 / U+2715 字形，GBK 也编码不了；状态列用 GB2312 符号区的
+  `√` / `×`。由 `tools/check_font_glyphs.py` 逐字符核验。
+- **标准输出必须是有损模式**（`errors="replace"`），任何 `print` 都不得因编码致崩；
+  `--selftest` 打结果行用 ASCII 标记 `OK`/`WARN`/`FAIL`，**不打印界面状态文案**。
+  **不要指望 `PYTHONUTF8` / `PYTHONIOENCODING`**：实测对打包产物不生效。
+- **自动化入口 `--cli` / `--selftest` / `--diag` 出错绝不弹模态框**，只写日志与控制台，
+  并返回非 0 退出码（模态框会把脚本、CI、回归工具卡死）。
 - 界面语言：默认按操作系统语言自动判定（中文系统 → 中文，**其余一律英文**），
   用户可在标题栏右上角手动切三档（自动 / 中文 / English），选择写入
   `%APPDATA%\Md2docs\settings.json`。优先级 `--lang` > 记忆档位 > 系统探测 > 兜底 en。
@@ -48,8 +56,8 @@
 ## 打包
 
 - 命令：`pyinstaller Md2docs.build.spec --noconfirm --clean`（在 md2docs-tk venv 下执行）。
-- 产物：`dist/Md2docs.exe`，onefile + windowed。v1.5 实测 18,868,466 字节（≈ 18.0 MiB，
-  即 Windows 显示口径）；v1.4 为 19,679,149 字节（≈ 18.8 MiB）。体量随打包缓存略有浮动，
+- 产物：`dist/Md2docs.exe`，onefile + windowed。v1.6 实测 18,869,192 字节（≈ 18.0 MiB，
+  即 Windows 显示口径）；v1.5 为 18,868,466 字节（≈ 18.0 MiB）。体量随打包缓存略有浮动，
   验完整性靠 `--selftest` + `check_output.py`，不要只看字节数。
 - 程序图标在 `assets/app.ico`（**不要**放回 `build/`：该目录被 .gitignore 忽略且会被
   `--clean` 清空）。打包时作为 datas 落到包内 `build/app.ico`，与 `gui.resource_path` 约定一致。
@@ -101,10 +109,12 @@
 - 拖放回归：`python tools/check_dnd.py [--exe] [--argv]`（构造 `HDROP` 并投递真实
   `WM_DROPFILES`；不依赖真实鼠标输入，锁屏下同样有效）
 - 国际化回归：`python tools/check_i18n.py [-v]`（词条自洽 / 硬编码扫描 / LANGID 判定 / 双语界面快照）
+- 用字回归：`python tools/check_font_glyphs.py [-v]`（词条每个字符「有字形 + GBK 可编码」）
 - 版式回归：`python tools/check_ui_layout.py`（圆角按钮 + 第 3 步控件组居中；需已映射窗口）
-- 界面截图：`python tools/shot_ui.py tests/_shots`（用 `PrintWindow(hwnd, mem, 2)`
+- 界面截图：`python tools/shot_ui.py tests/_shots [--run]`（用 `PrintWindow(hwnd, mem, 2)`
   = `PW_RENDERFULLCONTENT`，**桌面被 Windows 聚焦全屏层遮挡时也能拍到窗口内容**，
-  比 `ImageGrab` 抓屏可靠——后者只会拍到遮挡层）。
+  比 `ImageGrab` 抓屏可靠——后者只会拍到遮挡层）。`--run` 会先跑一次真实转换，
+  **结果表的状态列只有跑过转换才看得见**，核对状态文案用字时必须带这一项。
 - 界面自检里加语言断言：`dist/Md2docs.exe --selftest` 会打印当前语言与档位，并做 zh↔en 往返切换。
 
 ## 窗口布局易错点
@@ -147,6 +157,26 @@
 
 ## 验证方法的坑（实测结论，勿再踩）
 
+- ⚠️ **开发 shell 带着 `PYTHONUTF8=1` / `PYTHONIOENCODING=utf-8`，会掩盖全部编码类缺陷。**
+  实测此时 `sys.flags.utf8_mode=1`、`sys.stdout.encoding=utf-8`，`✓` 之类打不出来就
+  什么错都不报；用户的普通控制台是 `utf8_mode=0` / `stdout=gbk`，同一个 `print` 当场抛
+  `UnicodeEncodeError`，被 `_fatal` 放大成"启动失败"模态框（V-14）。
+  **凡涉及编码 / 控制台 / 代码页 / 区域设置的验证，必须先 `unset PYTHONUTF8 PYTHONIOENCODING`
+  再跑。** 判据不是"跑过了"，而是"在目标环境里跑过了"。
+- ⚠️ **打包产物不认这两个环境变量**：同一份环境里 venv 的 python 是 `utf8_mode=1`，
+  而 `dist/Md2docs.exe` 仍按 GBK 输出并崩溃。产物行为必须单独确认，不能由源码态推断。
+- ⚠️ **onefile 的退出码要靠 `TerminateProcess` 显式带出去**：调用方等到的是**引导父进程**
+  的退出码，而 `_cleanup_frozen_exit()` 是强杀它的——不把本进程退出码传给
+  `TerminateProcess`，失败就会被抹成 0（脚本从此判断不出成败）。另外退出前要 `flush()`，
+  否则重定向到文件/管道时输出尾部会丢在缓冲区里。
+- **判断"字体缺字形"要量，不要靠通说**：`GetGlyphIndicesW` 说微软雅黑没有 U+2713 的
+  字形，但用 PrintWindow 逐像素比对后确认 **Tk 仍把它画出来了**（系统做了字体回退，
+  与确定缺字形的 U+E000 豆腐块位图明显不同）。同理，查字形必须用
+  `CreateFontIndirectW` + `LOGFONTW`——误用 A 版接口传 UTF-16 字节串会让字体名失效，
+  所有字符都"查不到"，得到与事实相反的结论。
+- **沙箱会因批量删除而 SIGTERM 掉整个 shell**：`rm -rf <目录>` 一定触发；
+  `rm -f <一串文件>` 同样触发（返回 `Signal: SIGTERM`，命令什么都没执行）。
+  需要清理生成物时优先改 `.gitignore`，不要硬删。
 - **窗口未映射时，与尺寸相关的缺陷不显现**。`root.withdraw()` 下测不出宽度漂移，
   必须在 `winfo_ismapped()` 为真的窗口里测（`tools/check_gui_width.py` 已按此实现）。
 - **`PostMessage(WM_LBUTTONDOWN)` 驱动不了 Tk**：投递到顶层窗口无效（Tk 不转发给子控件），

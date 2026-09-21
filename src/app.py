@@ -24,6 +24,33 @@ def _log_path() -> str:
     return os.path.join(base, "md2docs.log")
 
 
+def _make_output_safe():
+    """把标准输出/错误流调成"有损"模式：宁可少几个字符，也不能让程序倒在这儿。
+
+    为什么必须做
+    ------------
+    Windows 中文环境的控制台与管道默认用 GBK(936)。一旦输出的字符 GBK 打不出，
+    ``print`` 就抛 ``UnicodeEncodeError``，异常一路冒到 main 的兜底分支，弹出
+    "启动失败"模态框——``--selftest`` 只是跑个自检，却被一个符号带崩，报错信息
+    与真实原因毫无关联。
+
+    只放宽 ``errors``、**不动 encoding**：中文仍按控制台自身的编码正确显示，
+    只有确实打不出的字符退化成 ``?``。
+
+    ⚠️ 不能依赖 ``PYTHONUTF8`` / ``PYTHONIOENCODING``：实测这两个变量对本机
+    打包出的 EXE 不生效（同样一份环境，venv 里的 python 是 ``utf8_mode=1``，
+    而 ``dist/Md2docs.exe`` 仍按 GBK 输出并崩溃），所以必须由程序自己兜底。
+    """
+    for name in ("stdout", "stderr"):
+        stream = getattr(sys, name, None)
+        if stream is None:
+            continue
+        try:
+            stream.reconfigure(errors="replace")
+        except Exception:
+            pass
+
+
 def _attach_console():
     """--windowed 打包后 stdout 不可用，CLI 模式下附着到父控制台输出。"""
     if not getattr(sys, "frozen", False):
@@ -34,15 +61,16 @@ def _attach_console():
         if not kernel32.AttachConsole(-1):
             return
         try:
-            sys.stdout = open("CONOUT$", "w", buffering=1)
+            sys.stdout = open("CONOUT$", "w", buffering=1, errors="replace")
         except Exception:
             pass
         try:
-            sys.stderr = open("CONOUT$", "w", buffering=1)
+            sys.stderr = open("CONOUT$", "w", buffering=1, errors="replace")
         except Exception:
             pass
     except Exception:
         pass
+    _make_output_safe()
 
 
 def _say(msg: str):
@@ -83,10 +111,24 @@ def _parent_pid() -> int:
         return 0
 
 
-def _cleanup_frozen_exit():
+def _cleanup_frozen_exit(code: int = 0):
     """onefile 打包时，bootloader 父进程在部分 Windows 环境下
     于子进程退出后挂死（卡在消息等待），导致进程与 _MEI 临时目录残留。
-    这里在退出前主动结束父引导进程，并用一个分离的小任务延时清理临时目录。"""
+    这里在退出前主动结束父引导进程，并用一个分离的小任务延时清理临时目录。
+
+    ``code`` 必须传本进程的退出码：调用方（脚本 / 命令行）等到的是**引导父进程**
+    的退出码，而我们是用 ``TerminateProcess`` 强杀它的——不给码就等于把退出码
+    抹成 0，"转换失败"从此不可被发现。
+    """
+    # 先冲缓冲：重定向到文件/管道时标准输出是块缓冲的，而这里之后会强杀父进程
+    # 并让进程很快结束，不冲的话最后几行会丢在缓冲区里。
+    for name in ("stdout", "stderr"):
+        stream = getattr(sys, name, None)
+        try:
+            stream.flush()
+        except Exception:
+            pass
+
     if not getattr(sys, "frozen", False):
         return
     try:
@@ -127,7 +169,8 @@ def _cleanup_frozen_exit():
                 kernel32 = ctypes.windll.kernel32
                 h = kernel32.OpenProcess(PROCESS_TERMINATE, False, ppid)
                 if h:
-                    kernel32.TerminateProcess(h, 0)
+                    # 带上本进程的退出码，别让强杀把失败码抹成 0
+                    kernel32.TerminateProcess(h, int(code) & 0xFFFFFFFF)
                     kernel32.CloseHandle(h)
             except Exception:
                 pass
@@ -154,15 +197,27 @@ def _fail(msg: str):
         pass
 
 
-def _fatal(msg: str):
-    """界面起不来时的兜底提示（不依赖任何第三方库）。"""
+def _fatal(msg: str, headless: bool = False) -> int:
+    """出错兜底：日志必写；**模态框只在图形界面模式下弹**，返回统一的失败码。
+
+    ``--cli`` / ``--selftest`` / ``--diag`` 是给脚本与回归工具用的入口，弹一个
+    要人点"确定"的模态框会把调用方直接卡死（CI、自动化脚本都吃这一套）。
+    这类入口只写日志与控制台。
+
+    注意返回值：调用方直接 ``return _fatal(...)``，所以这里必须给出失败码，
+    否则 exit code 会变成 0——脚本就再也判断不出转换到底成没成。
+    """
     _fail(msg)
+    if headless:
+        _say(msg)
+        return 1
     try:
         import ctypes
         ctypes.windll.user32.MessageBoxW(
             None, msg[-1500:], i18n.t("app.fatal_title"), 0x10)
     except Exception:
         pass
+    return 1
 
 
 # --------------------------------------------------------------------------- #
@@ -200,7 +255,7 @@ def run_cli(args) -> int:
             for w in r.warnings:
                 _say("       ! %s" % w)
     _say("\n" + i18n.t("cli.done", ok=ok, total=total))
-    _cleanup_frozen_exit()
+    # 收尾（含冲缓冲与 onefile 清理）统一由 main 的 finally 负责，这里不再重复
     return 0 if ok else 1
 
 
@@ -232,6 +287,8 @@ def _peek_lang(argv) -> str | None:
 
 
 def main() -> int:
+    _make_output_safe()
+
     # 命令行显式指定 > 上次手动选择 > 跟随系统
     raw = _peek_lang(sys.argv[1:])
     i18n.setup(raw if raw is not None else settings.get("lang", "auto"))
@@ -258,26 +315,32 @@ def main() -> int:
                         help=i18n.t("cli.diag_help"))
     args = parser.parse_args()
 
-    if args.cli is not None:
-        return run_cli(args)
+    # 给脚本 / 回归工具用的三个入口：出错只写日志与控制台，不弹模态框
+    headless = args.cli is not None or args.selftest or args.diag
 
+    rc = 0
     try:
-        import gui
-        if args.diag:
-            _attach_console()
-            return gui.diagnose()
-        if args.selftest:
-            _attach_console()
-            # 带文件参数时顺带跑一次真实转换，用于验证转换线程与结果表
-            files = _existing_files(args.files)
-            return gui.selftest(files[0] if files else None,
-                                args.out or None)
-        return gui.run(initial_files=_existing_files(args.files))
+        if args.cli is not None:
+            rc = run_cli(args)
+        else:
+            import gui
+            if args.diag:
+                _attach_console()
+                rc = gui.diagnose()
+            elif args.selftest:
+                _attach_console()
+                # 带文件参数时顺带跑一次真实转换，用于验证转换线程与结果表
+                files = _existing_files(args.files)
+                rc = gui.selftest(files[0] if files else None,
+                                  args.out or None)
+            else:
+                rc = gui.run(initial_files=_existing_files(args.files))
     except Exception:
-        _fatal(traceback.format_exc())
-        return 1
+        rc = _fatal(traceback.format_exc(), headless=headless)
     finally:
-        _cleanup_frozen_exit()
+        # 退出码要显式交给引导父进程带出去（见 _cleanup_frozen_exit）
+        _cleanup_frozen_exit(rc)
+    return rc
 
 
 if __name__ == "__main__":
