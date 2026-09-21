@@ -903,29 +903,41 @@ class Md2docsApp:
 
         bar = tk.Frame(panel, bg=PANEL)
         bar.pack(fill="x", padx=16)
-        # 整组控件水平居中：group 只占自身宽度，由 bar 把它居中摆放
-        group = tk.Frame(bar, bg=PANEL)
-        group.pack()
 
-        self.btn_run = self._btn(group, "run.button", self.start_convert,
+        # 「开始转换」必须**真正落在面板正中**：让它在一整行里居中 pack，
+        # 次级控件（打开输出文件夹、进度）用 place 钉在行的左右两端——place 不参与
+        # pack 布局，所以既不会把按钮挤偏，也不占高度。
+        #
+        # 反例（V-17）：把三者放进同一个 pack 行，被居中的只是"整行"，而按钮排在
+        # 行首，必然落在行的最左边——看起来就是"按钮靠左对齐"。
+        # 也试过"按钮独占一行 + 次级控件另起一行"：能居中，但内容高约 40px，
+        # 三个折叠区全展开时 main_req 会顶破可用高度（实测 971/992 > 964）。
+        row = tk.Frame(bar, bg=PANEL)
+        row.pack(fill="x")
+
+        self.btn_run = self._btn(row, "run.button", self.start_convert,
                                  "primary", font=self.fonts["base"],
                                  padx=22, pady=6)
-        self.btn_run.pack(side="left")
-        self.btn_open_out = self._btn(group, "run.open_out", self.open_out_dirs,
+        self.btn_run.pack()
+
+        self.btn_open_out = self._btn(row, "run.open_out", self.open_out_dirs,
                                       "soft")
-        self.btn_open_out.pack(side="left", padx=(10, 0))
+        self.btn_open_out.place(relx=0.0, rely=0.5, anchor="w")
         self.btn_open_out.configure(state="disabled")
 
-        self.prog = ttk.Progressbar(group, variable=self.var_progress,
+        # 进度条与进度文字竖排在一个定宽容器里：宽度恒定，所以文字长短变化不会让
+        # 整块左右抖动。锚在行右端，同样不参与按钮的居中计算。
+        pright = tk.Frame(row, bg=PANEL)
+        pright.place(relx=1.0, rely=0.5, anchor="e")
+        self.prog = ttk.Progressbar(pright, variable=self.var_progress,
                                     maximum=1.0,
                                     style="Md.Horizontal.TProgressbar",
                                     length=180)
-        self.prog.pack(side="left", padx=(16, 10))
-        # 固定宽度：进度文字长短变化时整组不会左右跳动
-        self.lbl_prog = tk.Label(group, textvariable=self.var_progress_text,
+        self.prog.pack()
+        self.lbl_prog = tk.Label(pright, textvariable=self.var_progress_text,
                                  bg=PANEL, fg=DIM, font=self.fonts["tiny"],
-                                 width=16, anchor="w")
-        self.lbl_prog.pack(side="left")
+                                 width=24, anchor="center")
+        self.lbl_prog.pack()
 
         wrap = tk.Frame(panel, bg=PANEL)
         wrap.pack(fill="x", padx=16, pady=(6, 9))

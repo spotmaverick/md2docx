@@ -33,7 +33,8 @@
 - pip 加 `PIP_NO_CACHE_DIR=1`（沙箱拦缓存清理会崩）。
 
 ## 打包
-- `pyinstaller Md2docs.build.spec --noconfirm --clean`（md2docs-tk venv）。产物 `dist/Md2docs.exe`，onefile+windowed，约 **18,870,912 字节**（v1.7）。体量随缓存浮动，验完整性靠 `--selftest`+`check_output.py`。
+- `pyinstaller Md2docs.build.spec --noconfirm --clean`（md2docs-tk venv）。产物 `dist/Md2docs.exe`，onefile+windowed，约 **18,870,627 字节**（v1.8；v1.7 18,870,912 / v1.6 18,869,192）。体量随缓存浮动，验完整性靠 `--selftest`+`check_output.py`。
+- 根目录另有 `README.md`（对外说明，引 `docs/images/` 的界面截图）与 `requirements.txt` / `requirements-dev.txt`（此前项目**没有任何依赖清单**，README 的安装步骤无法照做）。
 - 图标 `assets/app.ico`（**不要**放回 `build/`：被 .gitignore 忽略且 `--clean` 会清空）；打包作 datas 落到包内 `build/app.ico`，与 `gui.resource_path` 一致。
 - 入口：GUI 默认；`--cli` 转换；`--selftest` 自检；`--diag` DPI 与窗口几何；`--lang {auto,zh,en}`（优先级最高，不写配置）。
 
@@ -67,14 +68,16 @@
 - 屏幕 1920×1080 / 150% 缩放，**工作区高度仅 1020px**，纵向余量很小。
 - 「内容放得下」≠「用户看得见」：**尺寸与定位必须一起算**（V-09 曾因 Tk 默认位置把页脚裁掉）。定位见 `_place_on_workarea`。
 - 内容高度依赖 `winfo_reqheight()`，受折叠区展开影响；改布局后用 `--diag` 复核 `main_req ≤ avail`。
+- **高度只测默认态是无效的**（V-18）：折叠区展开才是高度峰值。`_autosize` 会把两张表压到 2 行下限来腾空间，压到底仍不够就是顶破。曾把「开始转换」和次级控件拆成两行，默认态只从 911 涨到 952（avail 964 看着够），三个折叠区全展开后却冲到 971(zh)/992(en) —— 直接顶破。改动布局后必跑 `tools/check_fold_fit.py`。
 - **宽度绝不由 `winfo_reqwidth()` 反推**（V-10）：Treeview 伸缩列随控件变宽而变宽，而 Treeview 请求宽度又按列宽算 → `窗口变宽→列变宽→reqwidth 变大→窗口再变宽` 自增（曾"每点一次格式卡片就宽 44px"）。现固定 `gui.WIN_W = 988`。
-- **第 3 步控件组居中**靠 `group.pack()`（不带 `fill`），外层 `bar` 居中它。加 `fill="x"`/`expand=True` 立刻破坏；组内进度条 `length=180`、进度文字 `width=16` 定长定宽，避免整组随文字跳动。
+- **「开始转换」按钮居中**（V-17）：**"控件组居中"不等于"按钮居中"**。按钮是组里最左边的元素，组居中时它照样贴在左侧。现在的做法是按钮在**整行**里居中 `pack`，「打开输出文件夹」与进度区用 `place` 锚在行的左右两端——`place` 不参与 `pack` 布局，所以既不影响居中也不占高度。**再加控件到这行时不要改回 `side="left"` 的 pack 串排**。
+- 另一个隐藏偏差点：进度文字用 `width=16` 定宽占位，**为空时仍占着约 160px 的不可见宽度**，会把同行可见内容挤偏约 80px。凡是"预留文本宽度"的控件，都要意识到空态也会占位。
 - 英文文案更长，但 `main_req` 在 zh/en 必须同为 988×911（`--diag --lang en` 复核）。
 
 ## 验证方法
 - 结构 `tools/check_output.py <输出目录> <主干>`；界面自检 `--selftest`（打印语言档位并做 zh↔en 往返）；几何 `--diag`（看 `foot_fully_visible` 是否 True）。
 - 无窗口/清理 `tools/check_no_console_window.py [--quick] [--exe]`：枚举 `ConsoleWindowClass`/`CASCADIA_HOSTING_WINDOW_CLASS`/`PseudoConsoleWindow` 在 spawn 前后取差集。**自带正反对照，正控必须阳性**（检不出就判"探针失效"而非通过）。`--exe` 覆盖 `--cli` 出口与 GUI 投 `WM_CLOSE` 关窗出口，并核对 `%TEMP%` 无 `_MEI*` 残留。
-- 宽度 `check_gui_width.py`（真实点击，需已映射窗口）/ `check_exe_gui.py <exe>`；拖放 `check_dnd.py [--exe] [--argv]`；i18n `check_i18n.py [-v]`；用字 `check_font_glyphs.py`；版式 `check_ui_layout.py`。
+- 宽度 `check_gui_width.py`（真实点击，需已映射窗口）/ `check_exe_gui.py <exe>`；拖放 `check_dnd.py [--exe] [--argv]`；i18n `check_i18n.py [-v]`；用字 `check_font_glyphs.py`；版式 `check_ui_layout.py`（**量的是「开始转换」按钮自身的中心**，不是父容器）；高度余量 `check_fold_fit.py`（默认态 + 折叠全展开态都要 ≤ avail）。
 - 截图 `tools/shot_ui.py tests/_shots [--run]`（`PrintWindow(…,2)`=`PW_RENDERFULLCONTENT`，**桌面被遮挡也能拍到内容**，比 `ImageGrab` 可靠）。`--run` 会先跑一次真实转换——**结果表状态列只有跑过转换才看得见**，核对状态文案必须带这项。另法 `grab_window.py <png> Md2docs`（需 Pillow；先设 DPI 感知再按面积 >400x400 过滤，否则抓到 Tk 隐藏辅助窗口）。
 - 判断「渲染器是否真嵌入图片」最可靠的是 **WPS COM 打开产物数 InlineShapes**，胜过解包 XML。
 

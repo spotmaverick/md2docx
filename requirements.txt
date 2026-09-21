@@ -1,0 +1,5 @@
+# Md2docs 运行期依赖
+python-docx==1.2.0
+beautifulsoup4==4.15.0
+markdown-it-py==4.2.0
+mdit-py-plugins==0.6.1

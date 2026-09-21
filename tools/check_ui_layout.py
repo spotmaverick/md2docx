@@ -1,13 +1,15 @@
 # -*- coding: utf-8 -*-
-"""界面版式回归：圆角按钮 + 第 3 步控件组水平居中。
+"""界面版式回归：圆角按钮 + 第 3 步「开始转换」按钮水平居中。
 
 为什么需要它
 ------------
 * 「圆角」在 Tk 里不是原生能力，是靠 Canvas 自绘实现的（``gui.RoundButton``）。
   一旦有人把 `_btn` 改回 ``tk.Button``，圆角会无声消失——外观缺陷不会被任何
   功能测试发现，所以这里把"确实是圆角多边形"变成断言。
-* 「控件组水平居中」依赖 ``pack`` 的居中行为，很容易被后续加的 padx / fill
-  参数悄悄破坏，同样需要机械校验。
+* 「按钮居中」依赖 ``pack`` 的居中行为，很容易被后续改动悄悄破坏。
+  尤其要盯住 **V-17**：把主按钮和次级控件放进同一个 ``pack`` 行时，被居中的
+  只是"整行"，而按钮排在行首必然落在行的最左边——视觉上就是"按钮靠左对齐"。
+  所以这里量的是**按钮自身的中心**，不是父容器的居中状态。
 
 硬约束：必须使用**已映射**的窗口。未映射时 winfo_width() 恒为 1，
 与尺寸相关的结论全都不成立（本项目踩过这个坑）。
@@ -36,6 +38,13 @@ CENTER_TOL = 1
 
 def _round_buttons(root) -> list:
     return [w for w in gui.walk_widgets(root) if isinstance(w, gui.RoundButton)]
+
+
+def _margins(inner_x: int, inner_w: int, outer_w: int):
+    """inner 相对 outer 的左余 / 右余 / 两者之差。"""
+    left = inner_x
+    right = outer_w - (inner_x + inner_w)
+    return left, right, abs(left - right)
 
 
 def check_rounding(app, root) -> list[str]:
@@ -73,24 +82,43 @@ def check_rounding(app, root) -> list[str]:
 
 
 def check_centering(app, root, lang: str) -> list[str]:
-    """第 3 步的控件组必须相对所在行水平居中。"""
+    """第 3 步：主按钮自身居中，且次级控件不得与按钮重叠。"""
     root.update_idletasks()
-    group = app.btn_run.master                 # group
-    bar = group.master                         # bar（fill="x"，撑满面板宽）
-    gx, gw = group.winfo_x(), group.winfo_width()
+    row = app.btn_run.master                     # btn_run -> row
+    bar = row.master                             # row -> bar（fill="x"）
     bw = bar.winfo_width()
-    if bw <= 1 or gw <= 1:
-        return ["%s：控件组/容器宽度异常（bar=%d group=%d），窗口可能未映射"
-                % (lang, bw, gw)]
-    left = gx
-    right = bw - (gx + gw)
-    delta = abs(left - right)
-    print("[layout] %s：bar=%d  group=%d  左%d 右%d  偏差=%d"
-          % (lang, bw, gw, left, right, delta))
-    if delta > CENTER_TOL:
-        return ["%s：控件组未水平居中，左余 %d 右余 %d（偏差 %dpx）"
-                % (lang, left, right, delta)]
-    return []
+    if bw <= 1:
+        return ["%s：bar 宽度异常（%d），窗口可能未映射" % (lang, bw)]
+
+    problems: list[str] = []
+
+    # ① 主按钮居中：btn_run 的 x 是相对 row 的，须叠加 row 在 bar 里的偏移。
+    px = row.winfo_x() + app.btn_run.winfo_x()
+    pw = app.btn_run.winfo_width()
+    left, right, delta = _margins(px, pw, bw)
+    print("[layout] %s：bar=%d  按钮宽=%d  左%d 右%d  偏差=%d"
+          % (lang, bw, pw, left, right, delta))
+    if pw <= 1:
+        problems.append("%s：按钮宽度异常（%d）" % (lang, pw))
+    elif delta > CENTER_TOL:
+        problems.append("%s：「开始转换」按钮未水平居中，左余 %d 右余 %d（偏差 %dpx）"
+                        % (lang, left, right, delta))
+
+    # ② 次级控件由 place 摆放，不参与 pack 布局，所以不会把按钮挤偏；
+    #    但要防它们与按钮重叠——重叠了界面就看不清。
+    btn_l, btn_r = px, px + pw
+    out = app.btn_open_out
+    out_r = row.winfo_x() + out.winfo_x() + out.winfo_width()
+    prog_l = row.winfo_x() + app.prog.master.winfo_x()
+    print("[layout] %s：按钮[%d,%d]  打开输出文件夹右缘=%d  进度左缘=%d"
+          % (lang, btn_l, btn_r, out_r, prog_l))
+    if out_r > btn_l:
+        problems.append("%s：「打开输出文件夹」与「开始转换」重叠"
+                        "（右缘 %d > 按钮左缘 %d）" % (lang, out_r, btn_l))
+    if prog_l < btn_r:
+        problems.append("%s：进度区与「开始转换」重叠"
+                        "（左缘 %d < 按钮右缘 %d）" % (lang, prog_l, btn_r))
+    return problems
 
 
 def main() -> int:
@@ -128,7 +156,8 @@ def main() -> int:
         for p in problems:
             print("   -", p)
         return 1
-    print("\n[layout] 通过：按钮均为圆角，第 3 步控件组在中英两种语言下都居中")
+    print("\n[layout] 通过：按钮均为圆角，「开始转换」按钮在中英两种语言下"
+          "都精确居中，且与次级控件无重叠")
     return 0
 
 

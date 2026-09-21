@@ -1,0 +1,8 @@
+# Md2docs 开发/打包期依赖（运行 EXE 不需要）
+-r requirements.txt
+
+# 打包为单文件 EXE：pyinstaller Md2docs.build.spec
+pyinstaller==6.22.3
+
+# 仅 tools/shot_ui.py 与 tools/grab_window.py 截图用
+Pillow==12.3.0
