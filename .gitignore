@@ -17,3 +17,9 @@ tests/_exe_verify_*/
 tests/_gui_out/
 tests/_dnd_out/
 tests/_test_out/
+tests/_i18n_zh/
+tests/_i18n_en/
+tests/_exe_i18n/
+tests/_exe_imgs/
+# 界面截图（由 tools/shot_ui.py 生成，可随时重跑）
+tests/_shots/

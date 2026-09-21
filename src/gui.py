@@ -23,6 +23,8 @@ import tkinter.font as tkfont
 from tkinter import filedialog, ttk
 
 import convert
+import i18n
+import settings
 
 # --------------------------------------------------------------------------- #
 # 配色（对齐原界面视觉）
@@ -37,18 +39,25 @@ DIM = "#9aa3b8"
 MUTE = "#6b7488"
 ACCENT = "#6366f1"
 ACCENT_HI = "#7c7ff5"
+CARD_ON_HI = "#343a66"
 OK = "#34d399"
 WARN = "#fbbf24"
 ERR = "#f87171"
 
 FMT_ORDER = ["docx", "doc", "wps", "txt"]
 FMT_TAG = {"docx": "DOCX", "doc": "DOC", "wps": "WPS", "txt": "TXT"}
-FMT_DESC = {"docx": "Word 2007+ 原生", "doc": "Word 97-2003",
-            "wps": "WPS 文字", "txt": "纯文本"}
 
 MD_EXTS = (".md", ".markdown", ".mdown", ".mkd", ".mdtext", ".mdtxt", ".txt")
 
-WINDOW_TITLE = "Md2docs · Markdown 转 Word / WPS / TXT"
+
+def fmt_desc(fid: str) -> str:
+    """格式卡片上的说明文字（随界面语言）。"""
+    return i18n.t("fmt.desc." + fid)
+
+
+def window_title() -> str:
+    """窗口标题（随界面语言；回归脚本据此定位窗口）。"""
+    return i18n.t("app.window_title")
 
 # 窗口设计宽度（客户区）。必须为常量，不可由内容宽度反推——原因见
 # Md2docsApp._window_width()：表格可伸缩列会与窗口宽度互相抬高，
@@ -79,11 +88,36 @@ def resource_path(name: str) -> str:
                         os.pardir, name)
 
 
+def mark_text(widget, key: str):
+    """给控件挂上词条键：语言切换时 retranslate() 会顺着控件树就地重设。
+
+    这是界面文案的统一入口——凡出现在界面上的静态文字都必须经过这里，
+    否则切换语言时会残留旧语言。``tools/check_i18n.py`` 负责强制这条约束。
+    """
+    try:
+        widget._tr_key = key
+        widget.configure(text=i18n.t(key))
+    except Exception:
+        pass
+    return widget
+
+
+def walk_widgets(widget):
+    """深度遍历控件树（语言切换时就地重译用）。"""
+    yield widget
+    try:
+        children = widget.winfo_children()
+    except Exception:
+        return
+    for child in children:
+        yield from walk_widgets(child)
+
+
 def open_path(path: str) -> tuple[bool, str]:
     if not path:
-        return False, "空路径"
+        return False, i18n.t("err.empty_path")
     if not os.path.exists(path):
-        return False, "路径不存在"
+        return False, i18n.t("err.path_missing")
     try:
         os.startfile(path)          # noqa: S606 - Windows 原生打开
         return True, ""
@@ -272,12 +306,175 @@ def disable_file_drop(root: tk.Misc) -> None:
 
 
 # --------------------------------------------------------------------------- #
+# 圆角按钮
+# --------------------------------------------------------------------------- #
+def round_rect(canvas: tk.Canvas, x1, y1, x2, y2, r, **kw):
+    """在 Canvas 上画圆角矩形——Tk 没有原生的圆角图元。
+
+    用一圈控制点配 smooth=True 做贝塞尔平滑：比「四条圆弧 + 两个矩形」拼接
+    更稳，高 DPI 下也不会出现接缝。
+    """
+    r = max(0, min(r, (x2 - x1) / 2.0, (y2 - y1) / 2.0))
+    pts = [
+        x1 + r, y1, x2 - r, y1, x2, y1,
+        x2, y1 + r, x2, y2 - r, x2, y2,
+        x2 - r, y2, x1 + r, y2, x1, y2,
+        x1, y2 - r, x1, y1 + r, x1, y1,
+    ]
+    return canvas.create_polygon(pts, smooth=True, **kw)
+
+
+class RoundButton(tk.Canvas):
+    """圆角按钮。
+
+    Tk 原生 Button 只能画方角，所以这里用 Canvas 自绘。Canvas 自身底色取
+    父容器颜色（``surround``），四角因此与面板融为一体。
+
+    对外暴露 ``configure(text/fill/fg/hover/state)``，用法与 tk.Button 一致
+    （``bg`` 作为 ``fill`` 的别名保留，方便旧调用点）。
+    """
+
+    KINDS = {
+        # kind: (填充色, 文字色, 悬停填充色)
+        "primary": (ACCENT, "#ffffff", ACCENT_HI),
+        "soft": (PANEL2, TEXT, LINE),
+        "ghost": (PANEL, DIM, PANEL2),
+    }
+
+    def __init__(self, parent, text="", command=None, kind="soft", font=None,
+                 surround=PANEL, radius=8, padx=13, pady=5, min_width=0,
+                 fill=None, fg=None, hover=None, state="normal"):
+        super().__init__(parent, highlightthickness=0, bd=0, bg=surround,
+                         cursor="hand2", takefocus=0)
+        base_fill, base_fg, base_hover = self.KINDS.get(kind, self.KINDS["soft"])
+        self._fill = fill or base_fill
+        self._fg = fg or base_fg
+        self._hover = hover or base_hover
+        self._surround = surround
+        self._radius = int(radius)
+        self._padx = int(padx)
+        self._pady = int(pady)
+        self._min_w = int(min_width)
+        self._text = text
+        self._font = font
+        self._command = command
+        self._state = state
+        self._hovering = False
+        self._pressed = False
+        # 命名警告：不要用 self._w / self._h。tkinter.Misc 用 self._w 存控件在
+        # Tcl 里的路径名，一旦覆盖，任何 configure 都会炸成
+        #     _tkinter.TclError: invalid command name "134"
+        self._bw = self._bh = 1
+        self._measure()
+        self._redraw()
+        self.bind("<Enter>", self._on_enter)
+        self.bind("<Leave>", self._on_leave)
+        self.bind("<ButtonPress-1>", self._on_press)
+        self.bind("<ButtonRelease-1>", self._on_release)
+
+    # -- 尺寸 ------------------------------------------------------------ #
+    def _measure(self):
+        try:
+            f = tkfont.Font(root=self, font=self._font)
+        except Exception:
+            f = tkfont.nametofont("TkDefaultFont")
+        self._bw = max(self._min_w, f.measure(self._text) + 2 * self._padx)
+        self._bh = f.metrics("linespace") + 2 * self._pady
+        super().configure(width=self._bw, height=self._bh)
+
+    # -- 绘制 ------------------------------------------------------------ #
+    def _redraw(self):
+        self.delete("all")
+        fill, fg = self._fill, self._fg
+        if self._state == "disabled":
+            fg = MUTE
+        elif self._pressed or self._hovering:
+            fill = self._hover
+        round_rect(self, 0, 0, self._bw - 1, self._bh - 1, self._radius,
+                   fill=fill, outline=fill)
+        self.create_text(self._bw / 2.0, self._bh / 2.0, text=self._text,
+                         fill=fg, font=self._font)
+
+    # -- 兼容 tk.Button 的 configure ------------------------------------- #
+    def configure(self, cnf=None, **kw):
+        opts = dict(cnf or {})
+        opts.update(kw)
+        dirty = False
+        # bg 是旧调用写法，语义等同填充色
+        for key, attr in (("fill", "_fill"), ("bg", "_fill"), ("fg", "_fg"),
+                          ("hover", "_hover")):
+            if key in opts:
+                setattr(self, attr, opts.pop(key))
+                dirty = True
+        if "text" in opts:
+            self._text = opts.pop("text")
+            self._measure()
+            dirty = True
+        if "state" in opts:
+            self._state = str(opts.pop("state"))
+            try:
+                super().configure(
+                    cursor="hand2" if self._state != "disabled" else "arrow")
+            except Exception:
+                pass
+            dirty = True
+        if opts:
+            super().configure(**opts)
+        if dirty:
+            self._redraw()
+        return None
+
+    config = configure
+
+    def cget(self, key):
+        if key == "text":
+            return self._text
+        if key == "state":
+            return self._state
+        return super().cget(key)
+
+    def invoke(self):
+        if self._state != "disabled" and self._command:
+            self._command()
+
+    # -- 事件 ------------------------------------------------------------ #
+    def _on_enter(self, _e):
+        if self._state == "disabled":
+            return
+        self._hovering = True
+        self._redraw()
+
+    def _on_leave(self, _e):
+        self._hovering = False
+        self._pressed = False
+        self._redraw()
+
+    def _on_press(self, _e):
+        if self._state == "disabled":
+            return
+        self._pressed = True
+        self._redraw()
+
+    def _on_release(self, e):
+        was_pressed = self._pressed
+        self._pressed = False
+        if self._state == "disabled":
+            self._redraw()
+            return
+        inside = 0 <= e.x < self._bw and 0 <= e.y < self._bh
+        self._hovering = inside
+        self._redraw()
+        if was_pressed and inside and self._command:
+            self._command()
+
+
+# --------------------------------------------------------------------------- #
 # 折叠区
 # --------------------------------------------------------------------------- #
 class Fold(tk.Frame):
     """点标题栏展开 / 收起的区块，右侧可显示状态摘要。"""
 
-    def __init__(self, parent, title: str, on_toggle=None, fonts=None):
+    def __init__(self, parent, key: str, on_toggle=None, fonts=None):
         super().__init__(parent, bg=PANEL)
         self.fonts = fonts or {}
         self.on_toggle = on_toggle
@@ -291,8 +488,10 @@ class Fold(tk.Frame):
         self.arrow = tk.Label(self.head, text="▸", bg=PANEL, fg=MUTE,
                               font=self.fonts.get("small"), width=2)
         self.arrow.pack(side="left")
-        self.title = tk.Label(self.head, text=title, bg=PANEL, fg=TEXT,
-                              font=self.fonts.get("small"))
+        # 词条键挂在标题 Label 上（Fold 自身是 Frame，没有 text 选项）
+        self.title = mark_text(
+            tk.Label(self.head, bg=PANEL, fg=TEXT,
+                     font=self.fonts.get("small")), key)
         self.title.pack(side="left")
         self.summary = tk.Label(self.head, text="", bg=PANEL, fg=MUTE,
                                 font=self.fonts.get("tiny"), anchor="e")
@@ -353,6 +552,9 @@ class Md2docsApp:
         self._res_rows = 5              # 结果列表默认行数（可按空间压缩）
         self._file_rows = 3             # 文件列表默认行数（可按空间压缩）
         self._placed = False            # 是否已完成首次窗口定位
+        self._results: list = []        # 结果原始对象，语言切换时据此重画结果表
+        self._prog_kind = ""            # 进度文字的语义状态，便于重译
+        self._prog_args: tuple = ()
 
         self._init_fonts()
         self._init_vars()
@@ -397,7 +599,9 @@ class Md2docsApp:
         self.var_native = tk.IntVar(value=0)
         self.var_progress = tk.DoubleVar(value=0.0)
         self.var_progress_text = tk.StringVar(value="")
-        self.var_caps = tk.StringVar(value="正在检测本机 Office…")
+        self.var_caps = tk.StringVar(value=i18n.t("caps.detecting"))
+        # 语言档位沿用 app 已解析的选择（命令行 --lang 会体现在这里）
+        self.var_lang = tk.StringVar(value=i18n.current_choice())
 
     def _apply_ttk_style(self):
         st = ttk.Style(self.root)
@@ -446,25 +650,13 @@ class Md2docsApp:
     # ------------------------------------------------------------------ #
     # 构件工厂
     # ------------------------------------------------------------------ #
-    def _btn(self, parent, text, cmd, kind="soft", font=None, width=None):
-        colors = {
-            "primary": (ACCENT, "#ffffff", ACCENT_HI),
-            "soft": (PANEL2, TEXT, LINE),
-            "ghost": (PANEL, DIM, PANEL2),
-        }[kind]
-        bg, fg, hover = colors
-        b = tk.Button(parent, text=text, command=cmd, relief="flat", bd=0,
-                      highlightthickness=0, padx=13, pady=5, bg=bg, fg=fg,
-                      activebackground=hover,
-                      activeforeground="#ffffff" if kind == "primary" else TEXT,
-                      font=font or self.fonts["small"], cursor="hand2",
-                      disabledforeground=MUTE)
-        if width:
-            b.configure(width=width)
-        if kind != "primary":
-            b.bind("<Enter>", lambda _e: b.configure(bg=hover))
-            b.bind("<Leave>", lambda _e: b.configure(bg=bg))
-        return b
+    def _btn(self, parent, key, cmd, kind="soft", font=None, surround=PANEL,
+             padx=13, pady=5):
+        """建一个圆角按钮。文案走词条键，语言切换时自动重译。"""
+        b = RoundButton(parent, text=i18n.t(key), command=cmd, kind=kind,
+                        font=font or self.fonts["small"], surround=surround,
+                        padx=padx, pady=pady)
+        return mark_text(b, key)
 
     def _panel(self, parent):
         f = tk.Frame(parent, bg=PANEL, highlightbackground=LINE,
@@ -472,30 +664,31 @@ class Md2docsApp:
         f.pack(fill="x", pady=(0, 8))
         return f
 
-    def _panel_head(self, panel, step: str, text: str):
+    def _panel_head(self, panel, step: str, key: str):
         head = tk.Frame(panel, bg=PANEL)
         head.pack(fill="x", padx=16, pady=(7, 5))
         tk.Label(head, text=step, bg=ACCENT, fg="#ffffff",
                  font=self.fonts["tiny"], width=2).pack(side="left", padx=(0, 8))
-        tk.Label(head, text=text, bg=PANEL, fg=TEXT,
-                 font=self.fonts["bold"]).pack(side="left")
+        mark_text(tk.Label(head, bg=PANEL, fg=TEXT,
+                           font=self.fonts["bold"]), key).pack(side="left")
         right = tk.Frame(head, bg=PANEL)
         right.pack(side="right")
         return head, right
 
-    def _radio(self, parent, text, value, var):
-        return tk.Radiobutton(parent, text=text, value=value, variable=var,
-                              bg=PANEL, fg=TEXT, selectcolor=PANEL2,
-                              activebackground=PANEL, activeforeground=TEXT,
-                              font=self.fonts["small"], relief="flat", bd=0,
-                              highlightthickness=0, cursor="hand2",
-                              command=self._on_option_change)
+    def _radio(self, parent, key, value, var):
+        return mark_text(
+            tk.Radiobutton(parent, value=value, variable=var,
+                           bg=PANEL, fg=TEXT, selectcolor=PANEL2,
+                           activebackground=PANEL, activeforeground=TEXT,
+                           font=self.fonts["small"], relief="flat", bd=0,
+                           highlightthickness=0, cursor="hand2",
+                           command=self._on_option_change), key)
 
     # ------------------------------------------------------------------ #
     # 界面搭建
     # ------------------------------------------------------------------ #
     def _build(self):
-        self.root.title(WINDOW_TITLE)
+        self.root.title(window_title())
         self.root.configure(bg=BG)
         self.root.minsize(880, 660)
         ico = resource_path(os.path.join("build", "app.ico"))
@@ -526,28 +719,41 @@ class Md2docsApp:
         logo = tk.Canvas(bar, width=38, height=38, bg=BG, highlightthickness=0)
         logo.pack(side="left", padx=(0, 12))
         logo.create_rectangle(0, 0, 38, 38, fill=ACCENT, outline=ACCENT)
-        logo.create_text(19, 20, text="M", fill="#ffffff", font=self.fonts["logo"])
+        logo.create_text(19, 20, text=i18n.t("app.logo_letter"), fill="#ffffff",
+                         font=self.fonts["logo"])
 
         txt = tk.Frame(bar, bg=BG)
         txt.pack(side="left")
-        tk.Label(txt, text="Md2docs", bg=BG, fg=TEXT,
-                 font=self.fonts["title"]).pack(anchor="w")
-        tk.Label(txt, text="Markdown 一键转成 Word / WPS / 纯文本", bg=BG,
-                 fg=MUTE, font=self.fonts["sub"]).pack(anchor="w")
+        mark_text(tk.Label(txt, bg=BG, fg=TEXT, font=self.fonts["title"]),
+                  "app.name").pack(anchor="w")
+        mark_text(tk.Label(txt, bg=BG, fg=MUTE, font=self.fonts["sub"]),
+                  "app.subtitle").pack(anchor="w")
 
         right = tk.Frame(bar, bg=BG)
         right.pack(side="right")
         self.lbl_caps = tk.Label(right, textvariable=self.var_caps, bg=PANEL2,
                                  fg=DIM, font=self.fonts["tiny"], padx=10, pady=4)
-        self.lbl_caps.pack()
+        self.lbl_caps.pack(side="right")
+
+        # 语言切换入口：紧邻 Office 状态徽标的左侧
+        langbox = tk.Frame(right, bg=BG)
+        langbox.pack(side="right", padx=(0, 12))
+        mark_text(tk.Label(langbox, bg=BG, fg=MUTE, font=self.fonts["tiny"]),
+                  "lang.label").pack(side="left", padx=(0, 5))
+        self.cmb_lang = ttk.Combobox(langbox, state="readonly", width=9,
+                                     style="Md.TCombobox",
+                                     font=self.fonts["tiny"])
+        self.cmb_lang.pack(side="left")
+        self.cmb_lang.bind("<<ComboboxSelected>>", self._on_lang_pick)
+        self._sync_lang_combo()
 
     # -- 第 1 步：文件 --------------------------------------------------- #
     def _build_files(self):
         panel = self._panel(self.main)
-        _head, right = self._panel_head(panel, "1", "选择 Markdown 文件")
-        self._btn(right, "浏览本机文件", self.pick_files, "soft").pack(side="right")
-        self._btn(right, "清空", self.clear_files, "ghost").pack(side="right",
-                                                                  padx=(0, 8))
+        _head, right = self._panel_head(panel, "1", "step.files")
+        self._btn(right, "file.browse", self.pick_files, "soft").pack(side="right")
+        self._btn(right, "file.clear", self.clear_files, "ghost").pack(
+            side="right", padx=(0, 8))
 
         drop = tk.Frame(panel, bg=PANEL2, highlightbackground=LINE,
                         highlightthickness=1, cursor="hand2")
@@ -555,12 +761,11 @@ class Md2docsApp:
         drop.bind("<Button-1>", lambda _e: self.pick_files())
         inner = tk.Frame(drop, bg=PANEL2)
         inner.pack(pady=7)
-        t1 = tk.Label(inner, text="把 .md 文件拖到这里，或点击「浏览本机文件」"
-                                  "（也可直接拖到 Md2docs.exe 图标上）",
-                      bg=PANEL2, fg=TEXT, font=self.fonts["small"])
+        t1 = mark_text(tk.Label(inner, bg=PANEL2, fg=TEXT,
+                                font=self.fonts["small"]), "file.drop_hint")
         t1.pack()
-        t2 = tk.Label(inner, text="支持多选，自动保留相对图片引用", bg=PANEL2,
-                      fg=MUTE, font=self.fonts["tiny"])
+        t2 = mark_text(tk.Label(inner, bg=PANEL2, fg=MUTE,
+                                font=self.fonts["tiny"]), "file.drop_sub")
         t2.pack(pady=(2, 0))
         for w in (inner, t1, t2):
             w.bind("<Button-1>", lambda _e: self.pick_files())
@@ -570,8 +775,8 @@ class Md2docsApp:
         self.file_tree = ttk.Treeview(wrap, columns=("name", "src"),
                                       show="headings", height=3,
                                       style="Md.Treeview", selectmode="extended")
-        self.file_tree.heading("name", text="文件名", anchor="w")
-        self.file_tree.heading("src", text="位置", anchor="w")
+        self.file_tree.heading("name", text=i18n.t("file.col_name"), anchor="w")
+        self.file_tree.heading("src", text=i18n.t("file.col_path"), anchor="w")
         self.file_tree.column("name", width=200, anchor="w", stretch=False)
         self.file_tree.column("src", width=380, anchor="w", stretch=True)
         sb = ttk.Scrollbar(wrap, orient="vertical", style="Md.Vertical.TScrollbar",
@@ -582,9 +787,9 @@ class Md2docsApp:
         self.file_tree.bind("<Delete>", lambda _e: self.remove_selected())
         self.file_tree.bind("<Double-1>", lambda _e: self.open_selected())
 
-        self.lbl_file_empty = tk.Label(panel, text="还没有添加文件（支持 .md / "
-                                                   ".markdown）", bg=PANEL,
-                                       fg=MUTE, font=self.fonts["tiny"])
+        self.lbl_file_empty = mark_text(
+            tk.Label(panel, bg=PANEL, fg=MUTE, font=self.fonts["tiny"]),
+            "file.empty")
         self.lbl_file_empty.pack(anchor="w", padx=16, pady=(0, 12))
         if self.files:
             self.lbl_file_empty.pack_forget()
@@ -592,7 +797,7 @@ class Md2docsApp:
     # -- 第 2 步：输出设置 ----------------------------------------------- #
     def _build_output(self):
         panel = self._panel(self.main)
-        self._panel_head(panel, "2", "输出设置")
+        self._panel_head(panel, "2", "step.output")
 
         row = tk.Frame(panel, bg=PANEL)
         row.pack(fill="x", padx=16)
@@ -604,13 +809,13 @@ class Md2docsApp:
         body.pack(fill="x", padx=16, pady=(4, 7))
 
         # 输出位置
-        self.fold_out = Fold(body, "输出位置", on_toggle=self._autosize,
+        self.fold_out = Fold(body, "out.fold", on_toggle=self._autosize,
                              fonts=self.fonts)
         self.fold_out.pack(fill="x")
         r1 = tk.Frame(self.fold_out.body, bg=PANEL)
         r1.pack(fill="x")
-        self._radio(r1, "与源文件相同", "same", self.var_out_mode).pack(side="left")
-        self._radio(r1, "指定目录", "custom",
+        self._radio(r1, "out.same", "same", self.var_out_mode).pack(side="left")
+        self._radio(r1, "out.custom", "custom",
                     self.var_out_mode).pack(side="left", padx=(14, 10))
         self.ent_out = tk.Entry(r1, textvariable=self.var_out_dir, bg=PANEL2,
                                 fg=TEXT, insertbackground=TEXT, relief="flat",
@@ -618,21 +823,21 @@ class Md2docsApp:
                                 highlightcolor=ACCENT, font=self.fonts["small"],
                                 disabledbackground=PANEL, disabledforeground=MUTE)
         self.ent_out.pack(side="left", fill="x", expand=True, ipady=3)
-        self.btn_pick_dir = self._btn(r1, "浏览", self.pick_out_dir, "soft")
+        self.btn_pick_dir = self._btn(r1, "out.browse", self.pick_out_dir, "soft")
         self.btn_pick_dir.pack(side="left", padx=(8, 0))
 
         # TXT 选项
-        self.fold_txt = Fold(body, "TXT 选项", on_toggle=self._autosize,
+        self.fold_txt = Fold(body, "txt.fold", on_toggle=self._autosize,
                              fonts=self.fonts)
         self.fold_txt.pack(fill="x")
         t1 = tk.Frame(self.fold_txt.body, bg=PANEL)
         t1.pack(fill="x")
-        self._radio(t1, "去掉 Markdown 符号", "plain",
+        self._radio(t1, "txt.plain", "plain",
                     self.var_txt_mode).pack(side="left")
-        self._radio(t1, "保留原始 Markdown", "raw",
+        self._radio(t1, "txt.raw", "raw",
                     self.var_txt_mode).pack(side="left", padx=(14, 16))
-        tk.Label(t1, text="编码", bg=PANEL, fg=DIM,
-                 font=self.fonts["small"]).pack(side="left", padx=(0, 6))
+        mark_text(tk.Label(t1, bg=PANEL, fg=DIM, font=self.fonts["small"]),
+                  "txt.encoding").pack(side="left", padx=(0, 6))
         self.cmb_enc = ttk.Combobox(t1, textvariable=self.var_txt_enc,
                                     values=convert.ENCODINGS, state="readonly",
                                     width=20, style="Md.TCombobox",
@@ -640,16 +845,14 @@ class Md2docsApp:
         self.cmb_enc.pack(side="left")
 
         # 高质量模式
-        self.fold_native = Fold(body, ".doc / .wps 高质量模式",
+        self.fold_native = Fold(body, "native.fold",
                                 on_toggle=self._autosize, fonts=self.fonts)
         self.fold_native.pack(fill="x")
-        self.sw_native = tk.Checkbutton(
-            self.fold_native.right, text="启用", variable=self.var_native,
-            command=self._on_native_switch, bg=PANEL2, fg=DIM,
-            selectcolor=CARD_ON, activebackground=PANEL2,
-            activeforeground=TEXT, font=self.fonts["tiny"], relief="flat",
-            bd=0, highlightthickness=0, padx=8, pady=2, cursor="hand2",
-            indicatoron=False)
+        self.sw_native = RoundButton(
+            self.fold_native.right, text=i18n.t("native.enable"),
+            command=self._toggle_native, kind="soft", font=self.fonts["tiny"],
+            surround=PANEL, radius=6, padx=9, pady=2)
+        mark_text(self.sw_native, "native.enable")
         self.sw_native.pack()
         self.lbl_native = tk.Label(self.fold_native.body, text="", bg=PANEL,
                                    fg=DIM, font=self.fonts["tiny"],
@@ -669,7 +872,7 @@ class Md2docsApp:
         tag = tk.Label(inner, text=FMT_TAG[fid], bg=PANEL2, fg=ACCENT,
                        font=self.fonts["bold"])
         tag.pack(anchor="w")
-        desc = tk.Label(inner, text=FMT_DESC.get(fid, ""), bg=PANEL2, fg=MUTE,
+        desc = tk.Label(inner, text=fmt_desc(fid), bg=PANEL2, fg=MUTE,
                         font=self.fonts["tiny"])
         desc.pack(anchor="w")
 
@@ -677,7 +880,8 @@ class Md2docsApp:
         for w in widgets:
             w.bind("<Button-1>", lambda _e, f=fid: self.toggle_format(f))
         self._paint_fmt_card(fid, widgets)
-        return {"widgets": widgets}
+        # desc 不挂 _tr_key（键名随格式变化），由 retranslate() 单独重设
+        return {"widgets": widgets, "tag": tag, "desc": desc}
 
     def _paint_fmt_card(self, fid: str, widgets=None):
         widgets = widgets or self._fmt_cards[fid]["widgets"]
@@ -691,37 +895,45 @@ class Md2docsApp:
     # -- 第 3 步：转换 --------------------------------------------------- #
     def _build_run(self):
         panel = self._panel(self.main)
-        _head, _right = self._panel_head(panel, "3", "开始转换")
+        _head, _right = self._panel_head(panel, "3", "step.run")
 
         bar = tk.Frame(panel, bg=PANEL)
         bar.pack(fill="x", padx=16)
-        self.btn_run = self._btn(bar, "开始转换", self.start_convert, "primary",
-                                 font=self.fonts["base"])
-        self.btn_run.configure(padx=20, pady=5)
+        # 整组控件水平居中：group 只占自身宽度，由 bar 把它居中摆放
+        group = tk.Frame(bar, bg=PANEL)
+        group.pack()
+
+        self.btn_run = self._btn(group, "run.button", self.start_convert,
+                                 "primary", font=self.fonts["base"],
+                                 padx=22, pady=6)
         self.btn_run.pack(side="left")
-        self.btn_open_out = self._btn(bar, "打开输出文件夹", self.open_out_dirs,
+        self.btn_open_out = self._btn(group, "run.open_out", self.open_out_dirs,
                                       "soft")
         self.btn_open_out.pack(side="left", padx=(10, 0))
         self.btn_open_out.configure(state="disabled")
 
-        self.prog = ttk.Progressbar(bar, variable=self.var_progress, maximum=1.0,
+        self.prog = ttk.Progressbar(group, variable=self.var_progress,
+                                    maximum=1.0,
                                     style="Md.Horizontal.TProgressbar",
                                     length=180)
-        self.prog.pack(side="left", padx=(16, 10), pady=(6, 0))
-        tk.Label(bar, textvariable=self.var_progress_text, bg=PANEL, fg=DIM,
-                 font=self.fonts["tiny"]).pack(side="left")
+        self.prog.pack(side="left", padx=(16, 10))
+        # 固定宽度：进度文字长短变化时整组不会左右跳动
+        self.lbl_prog = tk.Label(group, textvariable=self.var_progress_text,
+                                 bg=PANEL, fg=DIM, font=self.fonts["tiny"],
+                                 width=16, anchor="w")
+        self.lbl_prog.pack(side="left")
 
         wrap = tk.Frame(panel, bg=PANEL)
         wrap.pack(fill="x", padx=16, pady=(6, 9))
         self.res_tree = ttk.Treeview(wrap, columns=("state", "file", "fmt", "info"),
                                      show="headings", height=5, style="Md.Treeview",
                                      selectmode="browse")
-        for cid, txt, w, anchor, stretch in (
-                ("state", "状态", 62, "center", False),
-                ("file", "文件", 178, "w", False),
-                ("fmt", "格式", 62, "center", False),
-                ("info", "说明", 390, "w", True)):
-            self.res_tree.heading(cid, text=txt, anchor=anchor)
+        for cid, key, w, anchor, stretch in (
+                ("state", "res.col_state", 62, "center", False),
+                ("file", "res.col_file", 178, "w", False),
+                ("fmt", "res.col_fmt", 62, "center", False),
+                ("info", "res.col_info", 390, "w", True)):
+            self.res_tree.heading(cid, text=i18n.t(key), anchor=anchor)
             self.res_tree.column(cid, width=w, anchor=anchor, stretch=stretch)
         sb = ttk.Scrollbar(wrap, orient="vertical",
                            style="Md.Vertical.TScrollbar",
@@ -739,8 +951,8 @@ class Md2docsApp:
         foot = tk.Frame(self.main, bg=BG)
         foot.pack(fill="x", pady=(2, 6))
         tk.Frame(foot, bg=LINE, height=1).pack(fill="x", pady=(0, 10))
-        tk.Label(foot, text="作者：王冠", bg=BG, fg=MUTE,
-                 font=self.fonts["tiny"]).pack()
+        mark_text(tk.Label(foot, bg=BG, fg=MUTE, font=self.fonts["tiny"]),
+                  "app.footer").pack()
 
     def _bind_keys(self):
         self.root.bind("<Control-o>", lambda _e: self.pick_files())
@@ -750,6 +962,95 @@ class Md2docsApp:
     def _enable_drop(self):
         ok = enable_file_drop(self.root, self.on_drop_files)
         self._dnd_ok = ok
+
+    # ------------------------------------------------------------------ #
+    # 界面语言
+    # ------------------------------------------------------------------ #
+    def _sync_lang_combo(self):
+        """把语言下拉框的档位与显示文字刷新到当前语言。"""
+        try:
+            self.cmb_lang.configure(values=[i18n.choice_label(c)
+                                            for c in i18n.LANG_CHOICES])
+            self.cmb_lang.current(i18n.LANG_CHOICES.index(self.var_lang.get()))
+        except Exception:
+            pass
+
+    def _on_lang_pick(self, _event=None):
+        try:
+            idx = self.cmb_lang.current()
+        except Exception:
+            return
+        if 0 <= idx < len(i18n.LANG_CHOICES):
+            self.set_language(i18n.LANG_CHOICES[idx])
+
+    def set_language(self, choice: str, persist: bool = True):
+        """切换界面语言：就地重译，不重建窗口。
+
+        ``persist=False`` 用于自检——不能因为跑一次自检就改掉主人的真实配置。
+        """
+        choice = i18n.normalize(choice)
+        self.var_lang.set(choice)
+        if persist:
+            settings.put("lang", choice)
+        i18n.setup(choice)
+        self.retranslate()
+
+    def retranslate(self):
+        """按当前语言把所有文案就地重设一遍。
+
+        静态文案靠构建时挂上的 ``_tr_key`` 顺着控件树重设；动态文案（折叠区
+        摘要、能力徽标、结果行、进度文字）重新推导一遍——文件列表与转换结果
+        全部保留，不会因为切语言而丢失。
+        """
+        try:
+            self.root.title(window_title())
+        except Exception:
+            pass
+        for w in walk_widgets(self.root):
+            key = getattr(w, "_tr_key", None)
+            if not key:
+                continue
+            try:
+                w.configure(text=i18n.t(key))
+            except Exception:
+                pass
+        try:
+            self.file_tree.heading("name", text=i18n.t("file.col_name"))
+            self.file_tree.heading("src", text=i18n.t("file.col_path"))
+            for cid, key in (("state", "res.col_state"),
+                             ("file", "res.col_file"),
+                             ("fmt", "res.col_fmt"),
+                             ("info", "res.col_info")):
+                self.res_tree.heading(cid, text=i18n.t(key))
+        except Exception:
+            pass
+        for fid in FMT_ORDER:
+            card = self._fmt_cards.get(fid)
+            if card:
+                try:
+                    card["desc"].configure(text=fmt_desc(fid))
+                except Exception:
+                    pass
+        self._sync_lang_combo()
+        self._sync_txt_fold()
+        self._sync_outdir_widgets()
+        self.refresh_outdir()
+        if self.caps:
+            self._apply_caps(self.caps)
+        else:
+            try:
+                self.var_caps.set(i18n.t("caps.detecting"))
+            except Exception:
+                pass
+        self._render_results()
+        self._apply_progress_text()
+        # 转换中「开始转换」显示的是进度文案，别被上面的遍历覆盖回默认值
+        if self.running:
+            try:
+                self.btn_run.configure(text=i18n.t("run.running"))
+            except Exception:
+                pass
+        self._autosize()
 
     # ------------------------------------------------------------------ #
     # 自适应高度（保证单页无滚动）
@@ -892,6 +1193,7 @@ class Md2docsApp:
         u = ctypes.windll.user32
         root = self.root
         d = {}
+        d["lang"] = "%s (%s)" % (i18n.current(), i18n.current_choice())
         d["tk"] = root.tk.call("info", "patchlevel")
         d["tk_scaling"] = root.tk.call("tk", "scaling")
         d["fpixels_1i"] = root.winfo_fpixels("1i")
@@ -951,7 +1253,7 @@ class Md2docsApp:
     def add_paths(self, paths):
         cands = self._iter_md(paths)
         if not cands:
-            self.toast("没有可添加的 Markdown 文件", "err")
+            self.toast(i18n.t("toast.no_files"), "err")
             return
         added, skipped = 0, 0
         known = {os.path.normcase(f["path"]) for f in self.files}
@@ -967,19 +1269,19 @@ class Md2docsApp:
         self.render_files()
         self.refresh_outdir()
         if added:
-            self.toast("已添加 %d 个文件" % added)
+            self.toast(i18n.t("toast.added", n=added))
         elif skipped:
-            self.toast("这些文件已在列表中", "warn")
+            self.toast(i18n.t("toast.duplicated"), "warn")
 
     def on_drop_files(self, paths):
         self.add_paths(paths)
 
     def pick_files(self):
         paths = filedialog.askopenfilenames(
-            title="选择 Markdown 文件",
-            filetypes=[("Markdown 文件", "*.md *.markdown *.mdown *.mkd"),
-                       ("文本文件", "*.txt"),
-                       ("所有文件", "*.*")])
+            title=i18n.t("file.dialog_title"),
+            filetypes=[(i18n.t("file.ft_md"), "*.md *.markdown *.mdown *.mkd"),
+                       (i18n.t("file.ft_txt"), "*.txt"),
+                       (i18n.t("file.ft_all"), "*.*")])
         if paths:
             self.add_paths(list(paths))
 
@@ -1022,11 +1324,12 @@ class Md2docsApp:
 
     def clear_results(self):
         self.res_tree.delete(*self.res_tree.get_children())
+        self._results.clear()
         self._res_dirs.clear()
         self._last_out_dirs = []
         self.btn_open_out.configure(state="disabled")
         self.var_progress.set(0)
-        self.var_progress_text.set("")
+        self._set_progress("")
 
     # ------------------------------------------------------------------ #
     # 选项联动
@@ -1046,7 +1349,7 @@ class Md2docsApp:
     def _sync_txt_fold(self):
         on = "txt" in self.formats
         self.fold_txt.set(on, notify=False)
-        self.fold_txt.set_summary("已选 TXT" if on else "未选 TXT",
+        self.fold_txt.set_summary(i18n.t("sum.txt_on" if on else "sum.txt_off"),
                                   OK if on else MUTE)
         self._autosize()
 
@@ -1056,8 +1359,9 @@ class Md2docsApp:
         self.ent_out.configure(state=state)
         self.btn_pick_dir.configure(state=state,
                                     fg=(TEXT if custom else MUTE))
-        self.fold_out.set_summary(("指定目录" if custom else "与源文件相同"),
-                                  TEXT if custom else MUTE)
+        self.fold_out.set_summary(
+            i18n.t("sum.out_custom" if custom else "sum.out_same"),
+            TEXT if custom else MUTE)
 
     def refresh_outdir(self):
         mode = self.var_out_mode.get()
@@ -1066,32 +1370,43 @@ class Md2docsApp:
             self.btn_pick_dir.configure(state="normal", fg=TEXT)
             val = self.var_out_dir.get()
             self.fold_out.set_summary(
-                ("指定目录：" + os.path.basename(val.rstrip("\\/")) if val
-                 else "指定目录（未选择）"), TEXT if val else MUTE)
+                i18n.t("sum.out_custom_dir",
+                       path=os.path.basename(val.rstrip("\\/"))) if val
+                else i18n.t("sum.out_custom_empty"), TEXT if val else MUTE)
         else:
             dirs = {os.path.dirname(f["path"]) for f in self.files}
             if not dirs:
-                txt, color = "与源文件相同", MUTE
+                txt, color = i18n.t("sum.out_same"), MUTE
             elif len(dirs) == 1:
-                d = next(iter(dirs))
-                txt, color = "与源文件相同：" + d, TEXT
+                txt, color = i18n.t("sum.out_same_dir",
+                                    path=next(iter(dirs))), TEXT
             else:
-                txt, color = "与源文件相同（多个目录）", TEXT
+                txt, color = i18n.t("sum.out_same_many"), TEXT
             self.fold_out.set_summary(txt, color)
 
     def pick_out_dir(self):
-        d = filedialog.askdirectory(title="选择输出目录")
+        d = filedialog.askdirectory(title=i18n.t("out.dialog_title"))
         if d:
             self.var_out_dir.set(os.path.normpath(d))
             self.var_out_mode.set("custom")
             self._sync_outdir_widgets()
             self.refresh_outdir()
 
+    def _toggle_native(self):
+        """「启用」开关：圆角按钮形式，点击翻转原生模式。"""
+        if not self._native_enabled():
+            return
+        self.var_native.set(0 if self.var_native.get() else 1)
+        self._on_native_switch()
+
     def _on_native_switch(self):
         on = bool(self.var_native.get()) and self._native_enabled()
-        self.sw_native.configure(fg=OK if on else DIM, bg=CARD_ON if on else PANEL2)
-        self.fold_native.set_summary("本机 Office 原生格式" if on else "RTF 兼容格式",
-                                     OK if on else MUTE)
+        self.sw_native.configure(fill=CARD_ON if on else PANEL2,
+                                 fg=OK if on else DIM,
+                                 hover=CARD_ON_HI if on else LINE)
+        self.fold_native.set_summary(
+            i18n.t("sum.native_on" if on else "sum.native_off"),
+            OK if on else MUTE)
         self._autosize()
 
     def _native_enabled(self):
@@ -1117,15 +1432,13 @@ class Md2docsApp:
         if self.caps.get("wps"):
             names.append("WPS")
         if names:
-            self.var_caps.set("● " + " / ".join(names) + " 已就绪")
+            self.var_caps.set(i18n.t("caps.ready", names=" / ".join(names)))
             self.lbl_caps.configure(fg=OK, bg="#143026")
-            hint = ("开启后调用本机 Office 另存为原生格式（稍慢）；关闭则用内置 "
-                    "RTF 引擎，秒出且格式同样完整。")
+            hint = i18n.t("caps.hint_ready")
         else:
-            self.var_caps.set("○ 未检测到 Word / WPS")
+            self.var_caps.set(i18n.t("caps.none"))
             self.lbl_caps.configure(fg=DIM, bg=PANEL2)
-            hint = ("本机未检测到 Word / WPS，此项不可用；.doc / .wps 由内置 RTF "
-                    "引擎生成，Word、WPS 均可直接打开。")
+            hint = i18n.t("caps.hint_none")
         self.lbl_native.configure(text=hint)
         enabled = self._native_enabled()
         self.sw_native.configure(state="normal" if enabled else "disabled")
@@ -1140,10 +1453,10 @@ class Md2docsApp:
         if self.running:
             return
         if not self.files:
-            self.toast("请先添加 Markdown 文件", "err")
+            self.toast(i18n.t("toast.need_files"), "err")
             return
         if not self.formats:
-            self.toast("请至少选择一种输出格式", "err")
+            self.toast(i18n.t("toast.need_formats"), "err")
             return
 
         mode = self.var_out_mode.get()
@@ -1151,19 +1464,20 @@ class Md2docsApp:
         if mode == "custom":
             out_dir = self.var_out_dir.get().strip()
             if not out_dir:
-                self.toast("请选择输出目录", "err")
+                self.toast(i18n.t("toast.need_outdir"), "err")
                 return
             try:
                 os.makedirs(out_dir, exist_ok=True)
             except OSError as exc:
-                self.toast("输出目录不可用：%s" % exc, "err")
+                self.toast(i18n.t("toast.outdir_bad", err=exc), "err")
                 return
 
         self.running = True
-        self.btn_run.configure(state="disabled", bg=MUTE, text="转换中…")
+        self.btn_run.configure(state="disabled", bg=MUTE,
+                               text=i18n.t("run.running"))
         self.clear_results()
         self.var_progress.set(0.02)
-        self.var_progress_text.set("转换中…")
+        self._set_progress("running")
 
         fmts = [f for f in FMT_ORDER if f in self.formats]
         payload = {
@@ -1184,7 +1498,7 @@ class Md2docsApp:
             if not os.path.isfile(path):
                 self.queue.put(("result", convert.Result(
                     source=path, name=item["name"], fmt="", ok=False,
-                    message="文件不存在")))
+                    message=i18n.t("res.file_missing"))))
                 done += 1
                 self.queue.put(("progress", (done, total)))
                 continue
@@ -1214,7 +1528,7 @@ class Md2docsApp:
                 if kind == "progress":
                     done, total = payload
                     self.var_progress.set(done / float(total))
-                    self.var_progress_text.set("已完成 %d / %d" % (done, total))
+                    self._set_progress("progress", done, total)
                 elif kind == "result":
                     self.add_result(payload)
                 elif kind == "caps":
@@ -1243,24 +1557,61 @@ class Md2docsApp:
             self._pump_id = None
         disable_file_drop(self.root)
 
+    def _set_progress(self, kind: str, *args):
+        """记下进度文字的语义状态，语言切换时据此重译。"""
+        self._prog_kind, self._prog_args = kind, args
+        self._apply_progress_text()
+
+    def _apply_progress_text(self):
+        kind, args = self._prog_kind, self._prog_args
+        if kind == "running":
+            text = i18n.t("prog.running")
+        elif kind == "progress":
+            text = i18n.t("prog.progress", done=args[0], total=args[1])
+        elif kind == "finished":
+            text = i18n.t("prog.finished", ok=args[0], total=args[1])
+        else:
+            text = ""
+        try:
+            self.var_progress_text.set(text)
+        except Exception:
+            pass
+
     def add_result(self, r: convert.Result):
+        self._results.append(r)
+        self._insert_result_row(len(self._results) - 1)
+
+    def _insert_result_row(self, idx: int):
+        """按 Result 对象画一行；iid 用它在 _results 中的下标，便于反查。"""
+        r = self._results[idx]
         if r.ok:
-            state, tag = "✓ 成功", "ok"
+            state, tag = i18n.t("res.state_ok"), "ok"
             info = "%s · %s · %s" % (r.target, fmt_size(r.size), r.engine)
             if r.warnings:
                 tag = "warn"
-                info += "  ⚠ " + "；".join(r.warnings)
+                info += "  ⚠ " + i18n.t("list_sep").join(r.warnings)
             self._res_dirs[str(r.target)] = os.path.dirname(r.target)
         else:
-            state, tag = "✕ 失败", "bad"
-            info = r.message or "转换失败"
+            state, tag = i18n.t("res.state_fail"), "bad"
+            info = r.message or i18n.t("res.failed")
         fmt = ("." + r.fmt) if r.fmt else "-"
-        self.res_tree.insert("", "end", tags=(tag,),
+        self.res_tree.insert("", "end", iid=str(idx), tags=(tag,),
                              values=(state, r.name, fmt, info))
+
+    def _render_results(self):
+        """整表重画：语言切换后「状态」列与引擎名都需要重译。"""
+        try:
+            self.res_tree.delete(*self.res_tree.get_children())
+            self._res_dirs.clear()
+            for i in range(len(self._results)):
+                self._insert_result_row(i)
+        except Exception:
+            pass
 
     def finish_convert(self):
         self.running = False
-        self.btn_run.configure(state="normal", bg=ACCENT, text="开始转换")
+        self.btn_run.configure(state="normal", bg=ACCENT,
+                               text=i18n.t("run.button"))
         rows = self.res_tree.get_children()
         n_total = len(rows)
         n_ok = 0
@@ -1269,12 +1620,12 @@ class Md2docsApp:
             if tags and tags[0] in ("ok", "warn"):
                 n_ok += 1
         self.var_progress.set(1.0)
-        self.var_progress_text.set("完成 %d / %d" % (n_ok, n_total))
+        self._set_progress("finished", n_ok, n_total)
         dirs = sorted({d for d in self._res_dirs.values() if d})
         self._last_out_dirs = dirs
         self.btn_open_out.configure(state="normal" if dirs else "disabled",
                                     fg=(TEXT if dirs else MUTE))
-        self.toast("转换完成：%d 个文件" % n_ok, "ok" if n_ok else "err")
+        self.toast(i18n.t("toast.finished", n=n_ok), "ok" if n_ok else "err")
 
     def open_out_dirs(self):
         if not self._last_out_dirs:
@@ -1284,14 +1635,21 @@ class Md2docsApp:
             self.toast(err, "err")
 
     def open_result_folder(self):
+        """双击结果行打开所在文件夹。
+
+        原先靠"状态列文字是否以『成功』结尾"判断成败——国际化之后必然失效，
+        现改为按 iid 反查 Result 对象，与语言无关。
+        """
         sel = self.res_tree.selection()
         if not sel:
             return
-        vals = self.res_tree.item(sel[0], "values")
-        if not str(vals[0]).endswith("成功"):
+        try:
+            r = self._results[int(sel[0])]
+        except Exception:
             return
-        target = str(vals[3]).split(" · ")[0]
-        ok, err = open_path(os.path.dirname(target))
+        if not r.ok or not r.target:
+            return
+        ok, err = open_path(os.path.dirname(r.target))
         if not ok:
             self.toast(err, "err")
 
@@ -1367,6 +1725,29 @@ def selftest(md_path: str | None = None, out_dir: str | None = None) -> int:
     need(app.var_out_mode.get() == "same", "默认输出位置应为「与源文件相同」")
     need(app.cmb_enc.get() == "utf-8", "默认编码应为 utf-8")
     print("[selftest] 控件就绪；拖放可用 =", app._dnd_ok)
+    print("[selftest] 当前语言 = %s（档位 %s）"
+          % (i18n.current(), i18n.current_choice()))
+
+    # 语言切换：往返一轮，确认文案真的跟着变（persist=False 不写用户配置）
+    orig_choice = i18n.current_choice()
+    try:
+        app.set_language("en", persist=False)
+        need(i18n.current() == "en", "切换到英文失败")
+        need(app.btn_run.cget("text") == i18n.t("run.button"),
+             "英文下主按钮文案未更新")
+        need(app.root.title() == i18n.t("app.window_title"),
+             "窗口标题未随语言更新")
+        app.set_language("zh", persist=False)
+        need(i18n.current() == "zh", "切回中文失败")
+        need(app.btn_run.cget("text") == i18n.t("run.button"),
+             "中文下主按钮文案未还原")
+        need(app.root.title() == i18n.t("app.window_title"),
+             "窗口标题未随语言还原")
+        print("[selftest] 语言往返切换 OK")
+    except Exception as exc:
+        problems.append("语言切换异常：%s" % exc)
+    finally:
+        app.set_language(orig_choice, persist=False)
 
     if md_path and os.path.isfile(md_path):
         if out_dir:

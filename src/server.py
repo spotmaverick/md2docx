@@ -162,7 +162,8 @@ class Handler(BaseHTTPRequestHandler):
             "ok": True,
             "workdir": self.state.workdir,
             "default_out": self.state.default_out_dir(),
-            "formats": [{"id": k, "ext": v["ext"], "label": v["label"]}
+            "formats": [{"id": k, "ext": v["ext"],
+                         "label": convert.format_label(k)}
                         for k, v in convert.FORMATS.items()],
             "caps": caps,
             "encodings": convert.ENCODINGS,

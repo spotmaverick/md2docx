@@ -11,6 +11,14 @@
 
 - **严格遵守用户的显式选择**：输出位置、输出格式、TXT 选项一律以界面选择为准，
   程序绝不擅自替用户切换输出模式或改写输出目录；出现冲突时提示，而不是自动改。
+- **界面文案一律走 i18n**：源码里不得出现硬编码的可见文案，全部经 `i18n.t(key)` 取词条；
+  中英两份键集必须一致（导入 `i18n` 时即自检，不一致直接抛错）。由
+  `tools/check_i18n.py` 用 ast 静态扫描强制。
+- **任何逻辑判断不得依赖界面文案**。旧代码用 `info.endswith("成功")` 判转换成功，
+  界面切英文（`✓ Done`）后立即失效（V-12）。结果行 iid 即 `Result` 下标，按行取对象。
+- 界面语言：默认按操作系统语言自动判定（中文系统 → 中文，**其余一律英文**），
+  用户可在标题栏右上角手动切三档（自动 / 中文 / English），选择写入
+  `%APPDATA%\Md2docs\settings.json`。优先级 `--lang` > 记忆档位 > 系统探测 > 兜底 en。
 - 默认输出字体为**微软雅黑**；界面单页无滚动，高级选项收纳进折叠区。
 - 目标平台 Windows；单文件 EXE 分发，**目标机器零外部依赖**（不依赖 WebView2 / .NET / Python / 浏览器）。
 - 签名：应用底部展示「作者：王冠」。
@@ -40,11 +48,43 @@
 ## 打包
 
 - 命令：`pyinstaller Md2docs.build.spec --noconfirm --clean`（在 md2docs-tk venv 下执行）。
-- 产物：`dist/Md2docs.exe`，onefile + windowed，19,679,149 字节（≈ 18.8 MiB，即 Windows 显示口径）。
+- 产物：`dist/Md2docs.exe`，onefile + windowed。v1.5 实测 18,868,466 字节（≈ 18.0 MiB，
+  即 Windows 显示口径）；v1.4 为 19,679,149 字节（≈ 18.8 MiB）。体量随打包缓存略有浮动，
+  验完整性靠 `--selftest` + `check_output.py`，不要只看字节数。
 - 程序图标在 `assets/app.ico`（**不要**放回 `build/`：该目录被 .gitignore 忽略且会被
   `--clean` 清空）。打包时作为 datas 落到包内 `build/app.ico`，与 `gui.resource_path` 约定一致。
 - 界面入口参数：GUI 默认；`--cli` 命令行转换；`--selftest` 界面自检；`--diag` 输出
-  DPI 与窗口几何度量（排查打包前后尺寸/定位差异用）。
+  DPI 与窗口几何度量（排查打包前后尺寸/定位差异用）；`--lang {auto,zh,en}` 指定界面语言
+  （优先级最高，不写配置文件）。
+
+## 界面国际化（i18n）
+
+- 词条表在 `src/i18n.py` 的 `STRINGS = {"zh": {...}, "en": {...}}`，**两份额必须同增同减**。
+- 判定函数 `i18n._detect_windows()`：读 `GetUserDefaultUILanguage()` 的 LANGID，
+  取主语言字段 `langid & 0x3FF` 与 `LANG_CHINESE = 0x04` 比较 → `zh`，**其余一律 `en`**。
+  不按国家/地区代码判定（zh-CN / zh-TW / zh-HK / zh-MO / zh-SG 主语言字段都是 0x04）。
+- `--lang` 由 `app._peek_lang()` 在 argparse **之前**预读，否则参数解析本身也要翻译，
+  会陷入先有鸡还是先有蛋。
+- 切语言走 `Md2docsApp.retranslate()`：遍历控件树，按 `_tr_key` 属性重新取词条，
+  **不重建窗口**（重建会丢失用户已选的文件与格式状态）。
+- 输出文档正文里的中文（`[图片：alt]`、链接 `文字（URL）`）**不随界面语言变化**，
+  由源 Markdown 决定；`check_i18n.py` 里以 `OUTPUT_CONTENT` 白名单显式豁免（遗留 G-07）。
+- **`_detect_windows` 必须打桩测**：本机是中文系统，不灌 LANGID 就永远只走 zh 分支，
+  判定规则写错也发现不了。`tools/check_i18n.py` 用替换 `sys.modules["ctypes"]` 的方式
+  灌 13 条 LANGID 用例（函数内 `import ctypes` 拿的就是 `sys.modules` 里的对象）。
+
+## 圆角按钮（`gui.RoundButton`）
+
+- Tk 原生 `tk.Button` **没有圆角能力**，圆角靠 Canvas 平滑多边形自绘
+  （`gui.round_rect()`，用控制点把四角切掉，点数 ≥ 12）。
+- **绝不能用 `self._w` / `self._h` 存按钮宽高**：它们是 `tkinter.Misc` 的内部属性
+  （保存控件的 Tcl 路径名），覆盖后报 `_tkinter.TclError: invalid command name "134"`，
+  报错信息与真实原因毫无关联（V-13）。现在用 `self._bw` / `self._bh`。
+- 连带教训：改完名字后用短属性名做**全局替换**，会把 `_hover` 改成 `_bhover`、
+  把 `_worker` 改成 `_bworker`（后者会让**转换静默不执行**）——必须按词边界核对并用
+  `grep` 复核残留。
+- 回归：`tools/check_ui_layout.py` 断言 6 个按钮都确实是圆角（平滑多边形且点数 ≥ 12）、
+  且第 3 步控件组在 zh / en 下均居中（左右余量偏差 ≤ 1px）。
 
 ## 验证方法
 
@@ -60,6 +100,12 @@
 - 界面回归（产物）：`python tools/check_exe_gui.py dist/Md2docs.exe`
 - 拖放回归：`python tools/check_dnd.py [--exe] [--argv]`（构造 `HDROP` 并投递真实
   `WM_DROPFILES`；不依赖真实鼠标输入，锁屏下同样有效）
+- 国际化回归：`python tools/check_i18n.py [-v]`（词条自洽 / 硬编码扫描 / LANGID 判定 / 双语界面快照）
+- 版式回归：`python tools/check_ui_layout.py`（圆角按钮 + 第 3 步控件组居中；需已映射窗口）
+- 界面截图：`python tools/shot_ui.py tests/_shots`（用 `PrintWindow(hwnd, mem, 2)`
+  = `PW_RENDERFULLCONTENT`，**桌面被 Windows 聚焦全屏层遮挡时也能拍到窗口内容**，
+  比 `ImageGrab` 抓屏可靠——后者只会拍到遮挡层）。
+- 界面自检里加语言断言：`dist/Md2docs.exe --selftest` 会打印当前语言与档位，并做 zh↔en 往返切换。
 
 ## 窗口布局易错点
 
@@ -73,6 +119,10 @@
   于是形成 `窗口变宽 → 列变宽 → reqwidth 变大 → 窗口再变宽` 的自增循环。
   曾表现为「每点击一次格式卡片窗口就宽 44px」（点击会经 `_sync_txt_fold → _autosize`）。
   现固定为 `gui.WIN_W = 988`，见 `Md2docsApp._window_width()`。
+- **第 3 步控件组的居中**靠 `group.pack()`（不带 `fill`）实现——group 只占自身宽度，
+  外层 `bar` 把它居中。加 `fill="x"` 或 `expand=True` 会立刻破坏居中；
+  组内进度条用 `length=180` 定长、进度文字用 `width=16` 定宽，避免整组随文字长短左右跳动。
+- 英文文案更长，但 `main_req` 在 zh / en 下必须同为 988×911；`--diag --lang en` 可复核（UI-21）。
 
 ## 拖放（V-11，踩过一次进程级崩溃）
 

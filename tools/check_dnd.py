@@ -37,6 +37,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, os.path.join(ROOT, "src"))
 
+import i18n       # noqa: E402  （界面语言决定窗口标题，不能再硬编码）
+
 WM_DROPFILES = 0x0233
 GMEM_MOVEABLE = 0x0002
 
@@ -258,7 +260,13 @@ def run_source_mode(fixtures: list[str]) -> int:
     return 0
 
 
-WINDOW_TITLE = "Md2docs · Markdown 转 Word / WPS / TXT"
+def window_titles() -> set:
+    """所有可能的窗口标题。
+
+    界面支持中英双语，标题随语言而变，不能再写死一个常量——
+    否则在英文环境下会永远找不到窗口，误判成"程序没起来"。
+    """
+    return {i18n.STRINGS[lang]["app.window_title"] for lang in i18n.LANGS}
 
 
 def _proc_image(pid: int) -> str:
@@ -279,7 +287,7 @@ def _proc_image(pid: int) -> str:
 
 def find_app_window(exe: str, timeout: float = 40.0) -> int:
     """按窗口标题 + 映像路径找到真实 GUI 窗口（兼容 onefile 子进程）。"""
-    want_title = WINDOW_TITLE
+    want_titles = window_titles()
     want_exe = os.path.normcase(os.path.abspath(exe))
     end = time.time() + timeout
     while time.time() < end:
@@ -291,7 +299,7 @@ def find_app_window(exe: str, timeout: float = 40.0) -> int:
                 return True
             buf = ctypes.create_unicode_buffer(512)
             user32.GetWindowTextW(h, buf, 512)
-            if buf.value.strip() != want_title:
+            if buf.value.strip() not in want_titles:
                 return True
             pid = wintypes.DWORD()
             user32.GetWindowThreadProcessId(h, ctypes.byref(pid))

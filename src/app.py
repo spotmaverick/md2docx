@@ -14,7 +14,8 @@ import sys
 import time
 import traceback
 
-APP_TITLE = "Markdown 转 Word / WPS / TXT"
+import i18n
+import settings
 
 
 def _log_path() -> str:
@@ -159,7 +160,7 @@ def _fatal(msg: str):
     try:
         import ctypes
         ctypes.windll.user32.MessageBoxW(
-            None, msg[-1500:], "Md2docs 启动失败", 0x10)
+            None, msg[-1500:], i18n.t("app.fatal_title"), 0x10)
     except Exception:
         pass
 
@@ -177,12 +178,12 @@ def run_cli(args) -> int:
         else:
             files.append(f)
     if not files:
-        _say("没有找到待转换的 Markdown 文件")
+        _say(i18n.t("cli.no_files"))
         return 1
     fmts = [x.strip().lower() for x in (args.format or "docx").split(",") if x.strip()]
     bad = [f for f in fmts if f not in convert.FORMATS]
     if bad:
-        _say("不支持的格式：%s" % ", ".join(bad))
+        _say(i18n.t("cli.bad_format", list=", ".join(bad)))
         return 1
     total = ok = 0
     for fp in files:
@@ -198,7 +199,7 @@ def run_cli(args) -> int:
                 _say("[FAIL] %s : %s" % (r.name, r.message))
             for w in r.warnings:
                 _say("       ! %s" % w)
-    _say("\n完成 %d/%d" % (ok, total))
+    _say("\n" + i18n.t("cli.done", ok=ok, total=total))
     _cleanup_frozen_exit()
     return 0 if ok else 1
 
@@ -216,25 +217,45 @@ def _existing_files(paths) -> list[str]:
     return out
 
 
+def _peek_lang(argv) -> str | None:
+    """在 argparse 之前嗅探 --lang。
+
+    帮助文本本身就是按当前语言生成的，所以必须先定语言再建解析器。
+    返回 None 表示命令行没有显式指定。
+    """
+    for i, a in enumerate(argv):
+        if a == "--lang":
+            return argv[i + 1] if i + 1 < len(argv) else ""
+        if a.startswith("--lang="):
+            return a.split("=", 1)[1]
+    return None
+
+
 def main() -> int:
+    # 命令行显式指定 > 上次手动选择 > 跟随系统
+    raw = _peek_lang(sys.argv[1:])
+    i18n.setup(raw if raw is not None else settings.get("lang", "auto"))
+
     parser = argparse.ArgumentParser(
-        description="Md2docs - %s（原生桌面程序，无 Web 依赖）" % APP_TITLE)
+        description=i18n.t("cli.desc", title=i18n.t("app.tagline")))
     parser.add_argument("files", nargs="*", metavar="FILE",
-                        help="启动时直接载入的 Markdown 文件（可把文件拖到 EXE 图标上）")
+                        help=i18n.t("cli.files_help"))
     parser.add_argument("--cli", nargs="*", metavar="FILE",
-                        help="命令行模式：直接转换，不启动界面")
+                        help=i18n.t("cli.cli_help"))
     parser.add_argument("-f", "--format", default="docx",
-                        help="命令行模式的输出格式，逗号分隔，默认 docx")
+                        help=i18n.t("cli.format_help"))
     parser.add_argument("-o", "--out", default="",
-                        help="命令行模式的输出目录")
+                        help=i18n.t("cli.out_help"))
     parser.add_argument("--native", action="store_true",
-                        help="调用本机 Word/WPS 生成原生 .doc/.wps")
+                        help=i18n.t("cli.native_help"))
     parser.add_argument("--txt-mode", default="plain", choices=["plain", "raw"])
     parser.add_argument("--txt-encoding", default="utf-8")
+    parser.add_argument("--lang", default=None, choices=["auto", "zh", "en"],
+                        help=i18n.t("cli.lang_help"))
     parser.add_argument("--selftest", action="store_true",
-                        help="内部自检：创建界面与控件后立即退出，不显示窗口")
+                        help=i18n.t("cli.selftest_help"))
     parser.add_argument("--diag", action="store_true",
-                        help="内部诊断：输出 DPI 与窗口度量后退出")
+                        help=i18n.t("cli.diag_help"))
     args = parser.parse_args()
 
     if args.cli is not None:
@@ -247,7 +268,10 @@ def main() -> int:
             return gui.diagnose()
         if args.selftest:
             _attach_console()
-            return gui.selftest()
+            # 带文件参数时顺带跑一次真实转换，用于验证转换线程与结果表
+            files = _existing_files(args.files)
+            return gui.selftest(files[0] if files else None,
+                                args.out or None)
         return gui.run(initial_files=_existing_files(args.files))
     except Exception:
         _fatal(traceback.format_exc())

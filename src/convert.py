@@ -8,17 +8,24 @@ from dataclasses import dataclass, field
 
 import com_helper
 import docx_writer
+import i18n
 import rtf_writer
 import txt_writer
 from mdparse import parse_markdown
 
+# 只保留与语言无关的信息；显示名称一律经 format_label() 取当前语言文案
 FORMATS = {
-    "docx": {"ext": ".docx", "label": "Word 文档 (.docx)"},
-    "doc": {"ext": ".doc", "label": "Word 97-2003 (.doc)"},
-    "wps": {"ext": ".wps", "label": "WPS 文字 (.wps)"},
-    "txt": {"ext": ".txt", "label": "纯文本 (.txt)"},
+    "docx": {"ext": ".docx"},
+    "doc": {"ext": ".doc"},
+    "wps": {"ext": ".wps"},
+    "txt": {"ext": ".txt"},
 }
 FORMAT_ORDER = ["docx", "doc", "wps", "txt"]
+
+
+def format_label(fmt: str) -> str:
+    """输出格式的显示名称（随界面语言）。"""
+    return i18n.t("fmt.label." + fmt)
 
 # RTF 载体：Word / WPS / LibreOffice 均可原生打开
 RTF_BACKED = {"doc", "wps"}
@@ -85,13 +92,13 @@ def convert_file(md_path: str, formats: list[str], out_dir: str | None = None,
             try:
                 if fmt == "docx":
                     docx_writer.write_docx(blocks, target, base_dir, title=stem)
-                    res.engine = "python-docx"
+                    res.engine = i18n.t("engine.docx")
 
                 elif fmt == "txt":
                     txt_writer.write_txt(blocks, target, mode=txt_mode,
                                          encoding=txt_encoding,
                                          raw_source=source)
-                    res.engine = "内置"
+                    res.engine = i18n.t("engine.builtin")
 
                 else:  # doc / wps
                     done = False
@@ -101,20 +108,20 @@ def convert_file(md_path: str, formats: list[str], out_dir: str | None = None,
                                                    title=stem)
                         ok, msg = com_helper.save_as(native_docx, target)
                         if ok:
-                            res.engine = "本机 Office"
+                            res.engine = i18n.t("engine.office")
                             done = True
                         else:
-                            res.warnings.append("原生模式失败（%s），已改用兼容格式"
-                                                % msg)
+                            res.warnings.append(
+                                i18n.t("warn.native_failed", msg=msg))
                     if not done:
                         rtf_writer.write_rtf(blocks, target, base_dir)
-                        res.engine = "RTF 兼容格式"
+                        res.engine = i18n.t("engine.rtf")
 
                 res.target = target
                 res.ok = os.path.isfile(target)
                 res.size = os.path.getsize(target) if res.ok else 0
                 if not res.ok:
-                    res.message = "输出文件未生成"
+                    res.message = i18n.t("convert.no_output")
             except Exception as exc:
                 res.ok = False
                 res.message = "%s: %s" % (type(exc).__name__, exc)

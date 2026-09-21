@@ -8,6 +8,8 @@ from __future__ import annotations
 import os
 import threading
 
+import i18n
+
 # Word 另存为格式常量
 WD_FORMAT_DOC = 0        # .doc（Word 97-2003）
 WD_FORMAT_DOCX = 16      # .docx
@@ -90,7 +92,7 @@ def detect_all() -> dict:
     """
     if not _com_available():
         return {"word": False, "wps": False, "word_id": "", "wps_id": "",
-                "reason": "未安装 pywin32"}
+                "reason": i18n.t("com.no_pywin32")}
 
     word_ids, wps_ids = [], []
     for progid in WORD_PROGIDS:
@@ -135,7 +137,7 @@ def save_as(src_path: str, out_path: str, progids=None) -> tuple[bool, str]:
     else:
         progids = tuple(progids)
 
-    result: dict = {"ok": False, "msg": "未执行"}
+    result: dict = {"ok": False, "msg": i18n.t("com.not_run")}
 
     def worker():
         try:
@@ -147,7 +149,7 @@ def save_as(src_path: str, out_path: str, progids=None) -> tuple[bool, str]:
     t.start()
     t.join(timeout=_COM_TIMEOUT)
     if t.is_alive():
-        return False, "转换超时（本机 Office 无响应）"
+        return False, i18n.t("com.timeout")
     return bool(result.get("ok")), str(result.get("msg", ""))
 
 
@@ -172,7 +174,9 @@ def _do_save(src_path: str, out_path: str, progids) -> dict:
                 errors.append("%s: %s" % (progid, exc))
                 app = None
         if app is None:
-            return {"ok": False, "msg": "；".join(errors[:2]) or "未找到可用的 Office"}
+            return {"ok": False,
+                    "msg": i18n.t("list_sep").join(errors[:2])
+                           or i18n.t("com.no_office")}
 
         try:
             app.Visible = False
