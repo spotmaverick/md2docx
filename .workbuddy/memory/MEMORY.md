@@ -56,8 +56,8 @@
 ## 打包
 
 - 命令：`pyinstaller Md2docs.build.spec --noconfirm --clean`（在 md2docs-tk venv 下执行）。
-- 产物：`dist/Md2docs.exe`，onefile + windowed。v1.6 实测 18,869,192 字节（≈ 18.0 MiB，
-  即 Windows 显示口径）；v1.5 为 18,868,466 字节（≈ 18.0 MiB）。体量随打包缓存略有浮动，
+- 产物：`dist/Md2docs.exe`，onefile + windowed。v1.7 实测 18,870,912 字节（≈ 18.0 MiB，
+  即 Windows 显示口径）；v1.6 为 18,869,192、v1.5 为 18,868,466 字节。体量随打包缓存略有浮动，
   验完整性靠 `--selftest` + `check_output.py`，不要只看字节数。
 - 程序图标在 `assets/app.ico`（**不要**放回 `build/`：该目录被 .gitignore 忽略且会被
   `--clean` 清空）。打包时作为 datas 落到包内 `build/app.ico`，与 `gui.resource_path` 约定一致。
@@ -94,10 +94,29 @@
 - 回归：`tools/check_ui_layout.py` 断言 6 个按钮都确实是圆角（平滑多边形且点数 ≥ 12）、
   且第 3 步控件组在 zh / en 下均居中（左右余量偏差 ≤ 1px）。
 
+- **窗口宽度只有 `CREATE_NO_WINDOW(0x08000000)` 能压住；它一旦与
+  `DETACHED_PROCESS(0x00000008)` 或 `CREATE_NEW_CONSOLE` 同用就会被系统忽略**，
+  `cmd.exe` 于是自建控制台 → 用户看到"退出时冒黑框"（V-16）。之前
+  `_cleanup_frozen_exit` 就踩了这个组合，黑框标题即命令行本身（`ping -n 4 127.0.0.1`），
+  活约 3 秒。
+- **给 `subprocess` 传 `cmd` 的命令必须用原始字符串，不能用 list。**
+  list 形式会被 `list2cmdline` 把内层引号转义成 `\"`，而 **cmd.exe 不认反斜杠转义**
+  （它用 `""` 表示字面引号）→ `rd` 收到非法路径、退出码 123、静默失败。
+  正确写法：`'cmd /c "… & rd /s /q ""%s"""' % path`（实测 rc=0 且目录确实消失）。
+  这条坑的代价是 `_MEI` 解包目录**从来没被删掉过**，白堆了很久。
+- 相关硬约束：NFR-08（全程不得产生计划外可见窗口）、NFR-09（后台子进程不得静默失败，
+  其**效果**必须有回归断言）。通用提问方式："这件事失败了，我怎么知道？"
+- 回归：`python tools/check_no_console_window.py [--quick] [--exe]`——枚举控制台窗口类
+  （`ConsoleWindowClass` / `CASCADIA_HOSTING_WINDOW_CLASS` / `PseudoConsoleWindow`）
+  在 spawn 前后取差集。**自带正反对照，正控必须阳性**（故意用 buggy 组合，检不出就判
+  "探针失效"而不是判通过）。`--exe` 覆盖 `--cli` 出口与 GUI 投递 `WM_CLOSE` 关窗出口，
+  并核对 `%TEMP%` 无 `_MEI*` 残留。
+
 ## 验证方法
 
 - 结构自检：`python tools/check_output.py <输出目录> <文件名主干>`
 - 界面自检：`python src/app.py --selftest`（或 `dist/Md2docs.exe --selftest`）
+- 无窗口 / 清理回归：`python tools/check_no_console_window.py --exe`
 - 几何诊断：`dist/Md2docs.exe --diag`——重点看 `foot_fully_visible` 是否为 `True`。
 - 窗口截图：`python tools/grab_window.py <输出png> Md2docs`（需开发 venv 的 Pillow；
   必须先设 DPI 感知、再按面积 >400x400 过滤，否则会抓到 Tk 的隐藏辅助窗口）。

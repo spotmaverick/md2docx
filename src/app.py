@@ -111,6 +111,45 @@ def _parent_pid() -> int:
         return 0
 
 
+# 只用 CREATE_NO_WINDOW。它一旦与 DETACHED_PROCESS(0x00000008) 同用就会被系统
+# **忽略**（MSDN 原文），于是 cmd.exe 自己新分配一个控制台 —— 用户看到的就是
+# 「关掉程序之后凭空冒出个黑框，还要等 ping 跑满 3 秒才没」。
+CREATE_NO_WINDOW = 0x08000000
+
+
+def _spawn_cleanup(meipass: str, flags: int = CREATE_NO_WINDOW):
+    """后台延时删除 onefile 解包目录：必须先等本进程退出，目录才解锁。
+
+    两处不能想当然的地方
+    --------------------
+    1) **必须传原始命令行字符串，不能传 list。** list 形式会被
+       ``subprocess.list2cmdline`` 把内层引号转义成 ``\\"``，而 cmd.exe 不认
+       反斜杠转义（它用 ``""`` 表示字面引号），``rd`` 于是收到 ``\\"D:\\...\\"``
+       这种非法路径，报"文件名、目录名或卷标语法不正确"后静默失败 ——
+       解包目录一个也删不掉，全堆在 %TEMP% 里。实测：list 写法 rc=123、
+       目录仍在；``""path""`` 写法 rc=0、目录消失。
+    2) 控制台窗口只能靠 CREATE_NO_WINDOW 压住，见上面常量的注释。
+
+    ``flags`` 暴露出来只为让 tools/check_no_console_window.py 跑正反对照，
+    生产调用一律用默认值。返回 Popen 对象（失败返回 None）。
+    """
+    try:
+        import subprocess as _sp
+
+        line = 'cmd /c "ping -n 4 127.0.0.1 > nul & rd /s /q ""%s"""' % meipass
+        si = _sp.STARTUPINFO()
+        si.dwFlags |= _sp.STARTF_USESHOWWINDOW
+        si.wShowWindow = 0          # SW_HIDE，与 CREATE_NO_WINDOW 一起兜底
+        return _sp.Popen(line,
+                         stdin=_sp.DEVNULL, stdout=_sp.DEVNULL,
+                         stderr=_sp.DEVNULL,
+                         creationflags=flags,
+                         startupinfo=si,
+                         close_fds=True)
+    except Exception:
+        return None
+
+
 def _cleanup_frozen_exit(code: int = 0):
     """onefile 打包时，bootloader 父进程在部分 Windows 环境下
     于子进程退出后挂死（卡在消息等待），导致进程与 _MEI 临时目录残留。
@@ -133,7 +172,6 @@ def _cleanup_frozen_exit(code: int = 0):
         return
     try:
         import ctypes
-        import subprocess as _sp
 
         my_name = os.path.basename(sys.executable).lower()
         ppid = _parent_pid()
@@ -178,13 +216,7 @@ def _cleanup_frozen_exit(code: int = 0):
         # 清理 onefile 解包目录（本进程退出后由分离任务删除）
         meipass = getattr(sys, "_MEIPASS", "")
         if meipass and os.path.isdir(meipass):
-            try:
-                cmd = 'ping -n 4 127.0.0.1 > nul & rd /s /q "%s"' % meipass
-                _sp.Popen(["cmd", "/c", cmd],
-                          creationflags=0x00000008 | 0x08000000,
-                          close_fds=True)
-            except Exception:
-                pass
+            _spawn_cleanup(meipass)
     except Exception:
         pass
 
