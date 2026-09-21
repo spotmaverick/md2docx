@@ -20,7 +20,8 @@
 
 ## 远端仓库
 - `origin` = `git@github.com:spotmaverick/md2docx.git`；本地分支已由 `master` 更名 **`main`**。远端初始提交（`LICENSE`/`README.md`）已用 `--allow-unrelated-histories` 并入本地历史。
-- **本机从未配过 GitHub 认证**：`~/.ssh/` 无任何私钥（全盘搜过）、无 ssh-agent、无 `gh`、无 `~/.git-credentials`；凭据管理器只有 `git:https://gitee.com`（spotmaverick）。2026-09-21 生成 `~/.ssh/id_ed25519`（无口令），公钥待加。
+- **GitHub 认证已配好**：2026-09-21 生成 `~/.ssh/id_ed25519`（ed25519、无口令）并已加到 GitHub 账号，`ssh -T git@github.com` 返回 `Hi spotmaverick!`，`git push` 正常。
+  之前本机从未配过 GitHub 认证（`~/.ssh/` 只有 `known_hosts`、无 ssh-agent / `gh` / `~/.git-credentials`；凭据管理器只有 `git:https://gitee.com`）。
 - **读可匿名 HTTPS，写必须先认证**。
 - ⚠️ 别用「HTTPS 干跑推送」当认证探针：`GIT_TERMINAL_PROMPT=0` 对 GCM 无效，`git push --dry-run https://…` 会**静默挂死**（实测 3m47s）。判认证直接 `ssh -T git@github.com`（立即返回 `Permission denied (publickey)`）。
 
