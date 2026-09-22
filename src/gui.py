@@ -473,6 +473,93 @@ class RoundButton(tk.Canvas):
 
 
 # --------------------------------------------------------------------------- #
+# 地球图标（语言入口的标识）
+# --------------------------------------------------------------------------- #
+class GlobeIcon(tk.Canvas):
+    """地球标识：语言切换入口的图标，**纯矢量自绘、一个字符都不写**。
+
+    为什么标识不能是文字
+    -------------------
+    界面语言未必等于用户的母语：判定规则只认"中文系统 → 中文、其余 → 英文"，
+    而用户一旦手切错档位，界面上就会出现他读不懂的语言。偏偏"语言 / Language"
+    这段提示文字本身也是用当前界面语言写的——**用户要找的正是改语言的地方，
+    却先被这段读不懂的提示挡住**。地球是跨语言的通用标识，谁都能认出来（V-19）。
+
+    为什么不用字形（🌐 之类）
+    ------------------------
+    项目有硬用字约束：界面用字必须「UI 字体有字形 **且** GBK 可编码」
+    （见 ``i18n`` 模块头，由 ``tools/check_font_glyphs.py`` 强制执行）。
+    U+1F310(🌐) 两条都不满足——放词条里会被回归直接拦下。而画圆/椭圆/直线
+    根本不经过字体，所以天然免疫字形缺失与编码问题，也不需要任何图片资源。
+
+    灵感取经纬线地球：外圈 + 中央经线（竖椭圆）+ 赤道（横椭圆）。
+    ``command`` 给定时图标可点（悬停变亮 + 手型光标）。
+    """
+
+    def __init__(self, parent, size: int = 18, bg: str = BG, fg: str = DIM,
+                 hover: str = TEXT, press: str = MUTE, command=None):
+        super().__init__(parent, width=size, height=size, bg=bg,
+                         highlightthickness=0, bd=0, takefocus=0,
+                         cursor="hand2" if command else "")
+        self._size = int(size)
+        self._fg = fg
+        self._hover = hover
+        self._press = press
+        self._command = command
+        self._items: list = []
+        self._draw(fg)
+        if command:
+            self.bind("<Enter>", self._on_enter)
+            self.bind("<Leave>", self._on_leave)
+            self.bind("<ButtonPress-1>", self._on_press)
+            self.bind("<ButtonRelease-1>", self._on_release)
+
+    # -- 绘制 ------------------------------------------------------------ #
+    def _draw(self, color: str):
+        self.delete("all")
+        self._items = []
+        s = float(self._size)
+        r = (s - 2) / 2.0        # 四周留 1px：贴着边画会被裁掉外圈的抗锯齿边缘
+        cx = cy = s / 2.0
+        half = r * 0.42          # 经纬椭圆的短半轴，取外圈半径的 ~0.42 最像地球
+        self._items.append(self.create_oval(cx - r, cy - r, cx + r, cy + r,
+                                           outline=color))          # 外圈
+        self._items.append(self.create_oval(cx - half, cy - r,
+                                           cx + half, cy + r,
+                                           outline=color))          # 中央经线
+        self._items.append(self.create_oval(cx - r, cy - half,
+                                           cx + r, cy + half,
+                                           outline=color))          # 赤道
+
+    def _paint(self, color: str):
+        for item in self._items:
+            try:
+                self.itemconfigure(item, outline=color)
+            except Exception:
+                pass
+
+    # -- 交互 ------------------------------------------------------------ #
+    def _on_enter(self, _e):
+        self._paint(self._hover)
+
+    def _on_leave(self, _e):
+        self._paint(self._fg)
+
+    def _on_press(self, _e):
+        self._paint(self._press)
+
+    def _on_release(self, e):
+        inside = 0 <= e.x < self._size and 0 <= e.y < self._size
+        self._paint(self._hover if inside else self._fg)
+        if inside and self._command:
+            self._command()
+
+    # 供回归工具取"图标是不是真画出来的"，也便于人工核对图元构成
+    def shapes(self) -> list:
+        return [self.type(i) for i in self.find_all()]
+
+
+# --------------------------------------------------------------------------- #
 # 折叠区
 # --------------------------------------------------------------------------- #
 class Fold(tk.Frame):
@@ -739,11 +826,14 @@ class Md2docsApp:
                                  fg=DIM, font=self.fonts["tiny"], padx=10, pady=4)
         self.lbl_caps.pack(side="right")
 
-        # 语言切换入口：紧邻 Office 状态徽标的左侧
+        # 语言切换入口：紧邻 Office 状态徽标的左侧。
+        # 标识是**自绘地球图标**而非文字：文字提示用的是当前界面语言，恰好是
+        # 读不懂该语言的人看不懂的东西——而他要找的正是这个入口（V-19）。
         langbox = tk.Frame(right, bg=BG)
         langbox.pack(side="right", padx=(0, 12))
-        mark_text(tk.Label(langbox, bg=BG, fg=MUTE, font=self.fonts["tiny"]),
-                  "lang.label").pack(side="left", padx=(0, 5))
+        self.ico_lang = GlobeIcon(langbox, size=18, bg=BG, fg=DIM, hover=TEXT,
+                                  command=self.open_lang_dropdown)
+        self.ico_lang.pack(side="left", padx=(0, 6))
         self.cmb_lang = ttk.Combobox(langbox, state="readonly", width=9,
                                      style="Md.TCombobox",
                                      font=self.fonts["tiny"])
@@ -983,11 +1073,32 @@ class Md2docsApp:
     # 界面语言
     # ------------------------------------------------------------------ #
     def _sync_lang_combo(self):
-        """把语言下拉框的档位与显示文字刷新到当前语言。"""
+        """把语言下拉框的档位、显示文字与宽度刷新到当前语言。"""
         try:
-            self.cmb_lang.configure(values=[i18n.choice_label(c)
-                                            for c in i18n.LANG_CHOICES])
+            labels = [i18n.choice_label(c) for c in i18n.LANG_CHOICES]
+            self.cmb_lang.configure(values=labels)
             self.cmb_lang.current(i18n.LANG_CHOICES.index(self.var_lang.get()))
+            # 宽度按最长档位实测，不写死字符数：一旦有人把档位名写长
+            # （或加了新语种），写死的宽度会静默裁字——那种缺陷截图都难发现。
+            f = tkfont.Font(root=self.root, font=self.fonts["tiny"])
+            unit = f.measure("0") or 1        # Tk 的 -width 以"0"的宽度为单位
+            self.cmb_lang.configure(
+                width=int(max(f.measure(x) for x in labels) / unit) + 1)
+        except Exception:
+            pass
+
+    def open_lang_dropdown(self):
+        """展开语言列表（点地球图标时调用）。
+
+        只读下拉框在 Tk 里本身就是"一个大按钮"：实测在控件**任意位置**投递
+        一次 ButtonPress/ButtonRelease 都会把列表展开（不必点到右端的小箭头），
+        所以这里直接转发一次点击即可——不依赖 ``ttk::combobox::*`` 内部命令。
+        """
+        cb = self.cmb_lang
+        try:
+            y = max(1, cb.winfo_height() // 2)
+            cb.event_generate("<Button-1>", x=6, y=y)
+            cb.event_generate("<ButtonRelease-1>", x=6, y=y)
         except Exception:
             pass
 

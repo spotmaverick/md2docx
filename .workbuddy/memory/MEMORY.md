@@ -1,6 +1,6 @@
 # Md2docs 项目长期约定
 
-> 缺陷史与需求条目详见 `Md2docs.spec`（V-09~V-16、NFR-08/09）。此处只留**会反复踩的操作性结论**。
+> 缺陷史与需求条目详见 `Md2docs.spec`（V-09~V-20、NFR-08/09、UI-22~24）。此处只留**会反复踩的操作性结论**。
 
 ## 文件职责
 - `Md2docs.spec` = 需求规格说明书（唯一来源）；基线快照存 `docs/spec/archive/Md2docs-spec-v<版本>-<日期>.md`。
@@ -13,6 +13,7 @@
 - **逻辑判断不得依赖界面文案**（V-12；旧代码 `endswith("成功")` 切英文即失效）。结果行 iid 即 `Result` 下标，按行取对象。
 - **用字约束**：词条只许「UI 字体有字形 **且** GBK 可编码」的字符。微软雅黑无 U+2713/U+2715 字形且 GBK 编不了；状态列用 GB2312 的 `√`/`×`。`tools/check_font_glyphs.py` 核验。
 - **标准输出必须有损**（`errors="replace"`）；`--selftest` 结果行用 ASCII `OK`/`WARN`/`FAIL`，不打印界面文案。**别指望 `PYTHONUTF8`/`PYTHONIOENCODING`**：对打包产物不生效。
+  ⚠️ **工具与错误路径同样适用**（V-20）：曾在回归工具的**失败提示**里写了字面的 `🌐`，结果"缺陷被检出、工具在打印失败原因时自己抛 `UnicodeEncodeError`"。报错信息本身也可能打不出来。提示文字里提字符一律用码位写法（`U+1F310`），并给工具加 `_make_output_safe()`。
 - **`--cli`/`--selftest`/`--diag` 出错绝不弹模态框**，只写日志与控制台并返回非 0（模态框卡死脚本/CI）。
 - 界面语言按系统语言判定（中文→zh，**其余一律 en**），标题栏右上可手切三档，存 `%APPDATA%\Md2docs\settings.json`。优先级 `--lang` > 记忆档位 > 系统探测 > en。
 - 默认字体**微软雅黑**；单页无滚动，高级选项折叠。
@@ -33,7 +34,7 @@
 - pip 加 `PIP_NO_CACHE_DIR=1`（沙箱拦缓存清理会崩）。
 
 ## 打包
-- `pyinstaller Md2docs.build.spec --noconfirm --clean`（md2docs-tk venv）。产物 `dist/Md2docs.exe`，onefile+windowed，约 **18,870,627 字节**（v1.8；v1.7 18,870,912 / v1.6 18,869,192）。体量随缓存浮动，验完整性靠 `--selftest`+`check_output.py`。
+- `pyinstaller Md2docs.build.spec --noconfirm --clean`（md2docs-tk venv）。产物 `dist/Md2docs.exe`，onefile+windowed，约 **18,874,460 字节**（v1.9；v1.8 18,870,627 / v1.7 18,870,912）。体量随缓存浮动，验完整性靠 `--selftest`+`check_output.py`。
 - 根目录另有 `README.md`（对外说明，引 `docs/images/` 的界面截图）与 `requirements.txt` / `requirements-dev.txt`（此前项目**没有任何依赖清单**，README 的安装步骤无法照做）。
 - 图标 `assets/app.ico`（**不要**放回 `build/`：被 .gitignore 忽略且 `--clean` 会清空）；打包作 datas 落到包内 `build/app.ico`，与 `gui.resource_path` 一致。
 - 入口：GUI 默认；`--cli` 转换；`--selftest` 自检；`--diag` DPI 与窗口几何；`--lang {auto,zh,en}`（优先级最高，不写配置）。
@@ -45,6 +46,8 @@
 - 切语言走 `retranslate()`：遍历控件树按 `_tr_key` 重取词条，**不重建窗口**（重建会丢用户已选的文件与格式）。
 - 输出正文里的中文（`[图片：alt]`、链接 `文字（URL）`）**不随界面语言变**，由源 Markdown 决定；`check_i18n.py` 用 `OUTPUT_CONTENT` 白名单豁免（遗留 G-07，未定案）。
 - **`_detect_windows` 必须打桩测**：本机中文系统，不灌 LANGID 永远只走 zh 分支。`check_i18n.py` 用替换 `sys.modules["ctypes"]` 灌 13 条用例。
+- **语言入口的标识是自绘矢量地球，不是文字**（V-19 / UI-24）：界面语言未必是用户母语，"语言 / Language"这段提示本身就是他看不懂的文字，恰好挡住他要找的入口。`gui.GlobeIcon`（外圈 + 中央经线 + 赤道，3 个椭圆，**零 text 图元**、**零字符**）；`🌐` U+1F310 既非 GBK 也未必有字形，画椭圆则不经过字体。图标可点，点它展开列表；档位名用**本名**（`中文`/`English`）；下拉框宽度按最长档位实测，**别写死字符数**（换语言后会静默裁字）。`lang.label` 词条已删除。
+- 只读 `ttk.Combobox` **任意位置点击即展开**（不必点右端小箭头）；验证展开状态用 `ttk::combobox::PopdownWindow <w>` + `winfo ismapped`（**仅测试用**，生产代码不依赖该内部命令——`open_lang_dropdown()` 只转发一次 ButtonPress/Release）。popdown 的 listbox 不在 tkinter 的 `children` 表里（路径 `.!combobox.popdown.f.l` 的 `!` 是 Tk 对 `.` 的转义），驱动它只能走 Tcl 侧 `event generate`。
 
 ## 圆角按钮 `gui.RoundButton`
 - Tk 原生 `tk.Button` 无圆角，靠 Canvas 平滑多边形自绘（`gui.round_rect()`，点数 ≥ 12）。
@@ -77,7 +80,7 @@
 ## 验证方法
 - 结构 `tools/check_output.py <输出目录> <主干>`；界面自检 `--selftest`（打印语言档位并做 zh↔en 往返）；几何 `--diag`（看 `foot_fully_visible` 是否 True）。
 - 无窗口/清理 `tools/check_no_console_window.py [--quick] [--exe]`：枚举 `ConsoleWindowClass`/`CASCADIA_HOSTING_WINDOW_CLASS`/`PseudoConsoleWindow` 在 spawn 前后取差集。**自带正反对照，正控必须阳性**（检不出就判"探针失效"而非通过）。`--exe` 覆盖 `--cli` 出口与 GUI 投 `WM_CLOSE` 关窗出口，并核对 `%TEMP%` 无 `_MEI*` 残留。
-- 宽度 `check_gui_width.py`（真实点击，需已映射窗口）/ `check_exe_gui.py <exe>`；拖放 `check_dnd.py [--exe] [--argv]`；i18n `check_i18n.py [-v]`；用字 `check_font_glyphs.py`；版式 `check_ui_layout.py`（**量的是「开始转换」按钮自身的中心**，不是父容器）；高度余量 `check_fold_fit.py`（默认态 + 折叠全展开态都要 ≤ avail）。
+- 宽度 `check_gui_width.py`（真实点击，需已映射窗口）/ `check_exe_gui.py <exe>`；拖放 `check_dnd.py [--exe] [--argv]`；i18n `check_i18n.py [-v]`；用字 `check_font_glyphs.py`；版式 `check_ui_layout.py`（**量的是「开始转换」按钮自身的中心**，不是父容器）；高度余量 `check_fold_fit.py`（默认态 + 折叠全展开态都要 ≤ avail）；语言入口 `check_lang_entry.py`（标识必须零文字零字形，含**真机点击链路**与正控，运行期拦 `settings.put` 不写真实配置）。
 - 截图 `tools/shot_ui.py tests/_shots [--run]`（`PrintWindow(…,2)`=`PW_RENDERFULLCONTENT`，**桌面被遮挡也能拍到内容**，比 `ImageGrab` 可靠）。`--run` 会先跑一次真实转换——**结果表状态列只有跑过转换才看得见**，核对状态文案必须带这项。另法 `grab_window.py <png> Md2docs`（需 Pillow；先设 DPI 感知再按面积 >400x400 过滤，否则抓到 Tk 隐藏辅助窗口）。
 - 判断「渲染器是否真嵌入图片」最可靠的是 **WPS COM 打开产物数 InlineShapes**，胜过解包 XML。
 

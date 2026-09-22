@@ -169,7 +169,12 @@ STRINGS: dict[str, dict[str, str]] = {
         "convert.no_output": "输出文件未生成",
 
         # 语言选择
-        "lang.label": "语言",
+        # 这里**没有** lang.label：语言入口的标识是自绘地球图标，不写文字。
+        # 界面语言未必是用户的母语，此时"语言 / Language"这种提示本身就是
+        # 用户看不懂的文字，恰好会挡住他要找的那个入口（V-19）。
+        # 档位名的取法：语言一律用其**本名**（中文 / English，见 LANG_NAME），
+        # 所以两种界面下都认得出来；auto 是唯一随界面语言翻译的一档，
+        # 但它只影响"要不要跟随系统"这一个选择，不影响用户找到并切到自己的语言。
         "lang.auto": "自动",
 
         # 命令行
@@ -310,7 +315,12 @@ STRINGS: dict[str, dict[str, str]] = {
         "convert.no_output": "Output file was not created",
 
         # Language picker
-        "lang.label": "Language",
+        # No "lang.label" here: the picker is flagged by a vector-drawn globe
+        # icon instead of text, so a user who cannot read the current UI
+        # language can still find it (V-19). Language names are written in
+        # their own script (see LANG_NAME), so every entry is readable by
+        # whoever needs it; only the "auto" entry follows the UI language,
+        # and that one decides nothing about *which* language to pick.
         "lang.auto": "Auto",
 
         # Command line

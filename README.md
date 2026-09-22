@@ -162,7 +162,7 @@ pyinstaller Md2docs.build.spec --noconfirm --clean
 md2docx/
 ├─ src/                     应用源码
 │  ├─ app.py                入口：参数解析、CLI、自检、诊断、退出清理
-│  ├─ gui.py                全部界面（原生 tkinter），含圆角按钮与拖放
+│  ├─ gui.py                全部界面（原生 tkinter），含圆角按钮、地球图标与拖放
 │  ├─ i18n.py               中英词条表与语言判定
 │  ├─ theme.py              配色与字体
 │  ├─ settings.py           设置持久化（%APPDATA%\Md2docs\settings.json）
@@ -202,6 +202,7 @@ python tools\check_output.py <输出目录> <文件名主干>   :: 产物结构�
 python tools\check_i18n.py -v                          :: 词条自洽 / 硬编码扫描 / 语言判定 / 双语快照
 python tools\check_font_glyphs.py                      :: 每个非 ASCII 字符「字体有字形 且 GBK 可编码」
 python tools\check_ui_layout.py                        :: 圆角按钮 +「开始转换」按钮精确居中 + 无重叠
+python tools\check_lang_entry.py                       :: 语言入口是自绘地球图标（无文字、无字形），点它可展开并真的切换
 python tools\check_fold_fit.py                         :: 折叠区全展开时仍放得下，页脚完整可见
 python tools\check_gui_width.py                        :: 真实点击下窗口宽度恒定
 python tools\check_no_console_window.py --exe          :: 全程无计划外控制台窗口，且临时目录确实被清理
@@ -221,6 +222,7 @@ python tools\check_dnd.py --exe                        :: 拖放边界（构造�
 - 全部可见文案收敛在 `src/i18n.py` 的 `STRINGS = {"zh": {...}, "en": {...}}`，**两份必须同增同减**（导入时自检，不一致直接抛错）。`tools/check_i18n.py` 用 AST 静态扫描强制「源码里不得出现硬编码可见文案」。
 - 默认语言按系统界面语言判定：主语言为中文 → 中文，**其余一律英文**。判定用的是语言字段而非国家/地区代码，因此 zh-CN / zh-TW / zh-HK / zh-MO / zh-SG 都能正确识别为中文。
 - 切换语言**就地刷新、不重建窗口**，已选的文件与格式不会丢。
+- **语言入口的标识是自绘地球图标，不是文字。** 界面语言未必等于你的母语，此时「语言 / Language」这段提示本身也是用你看不懂的语言写的——用户要找的正是改语言的地方，却先被这段读不懂的提示挡住。地球图标跨语言通用，点它即可展开列表；列表里的语言名一律用**该语言自己的写法**（`中文` / `English`），所以谁都能认出自己那一项。图标是 Canvas 矢量绘制，不依赖字体字形与编码（`U+1F310` 这类字符在 GBK 与界面字体上都不可靠），也不需要任何图片资源。
 - **任何逻辑判断都不得依赖界面文案。** 结果行的 iid 直接对应结果下标，按行取对象 —— 早期代码用 `endswith("成功")` 判断成败，界面一换语言就静默失效。
 
 ---
